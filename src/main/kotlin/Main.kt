@@ -8,7 +8,10 @@ fun main(args: Array<String>) {
         println("Usage: Compiler <source_file> <output_ir_file>")
     }
 
-    val sourceFilePath = args.getOrNull(0) ?: "C:\\Users\\janva\\IdeaProjects\\slang\\src\\main\\resources\\example.slang"
+    val sourceFilePath = args.getOrNull(0)
+        ?: Compiler::class.java.getResource("/example.slang")?.path
+        ?: throw IllegalArgumentException("Resource file 'example.slang' not found")
+
     val outputIRFilePath = args.getOrNull(1) ?: "output.ll"
 
     val sourceCode = File(sourceFilePath).readText()

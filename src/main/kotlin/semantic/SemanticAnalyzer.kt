@@ -2,6 +2,10 @@ package nl.endevelopment.semantic
 
 import nl.endevelopment.ast.*
 
+
+/**
+ * The SemanticAnalyzer performs type checking and scope resolution using the AST.
+ */
 class SemanticAnalyzer {
     private val symbolTable = SemanticSymbolTable()
 

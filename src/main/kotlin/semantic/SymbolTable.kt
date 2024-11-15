@@ -33,4 +33,12 @@ class SemanticSymbolTable {
         }
         return null
     }
+
+    fun lookupInCurrentScope(name: String): Type? {
+        return if (scopes.isNotEmpty()) {
+            scopes.last()[name]
+        } else {
+            null
+        }
+    }
 }

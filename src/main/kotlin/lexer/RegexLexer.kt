@@ -4,6 +4,7 @@ import nl.endevelopment.utils.Utils
 
 /**
  * Represents a lexical token with a type, value, line, and column.
+ * The RegexLexer tokenizes the raw source code into a list of Token objects.
  */
 data class Token(val type: TokenType, val value: String, val line: Int, val column: Int)
 

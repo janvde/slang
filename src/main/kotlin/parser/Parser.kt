@@ -9,6 +9,10 @@ import nl.endevelopment.lexer.TokenType
 import nl.endevelopment.semantic.Type
 import nl.endevelopment.utils.Utils
 
+
+/**
+ * The Parser consumes the list of tokens to build an Abstract Syntax Tree (AST).
+ */
 class Parser(private val tokens: List<Token>) {
     private var current = 0
 
