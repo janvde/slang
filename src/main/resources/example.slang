@@ -1,2 +1,2 @@
-let a: int = 5 + 10;
+let a: Int = 5 + 10;
 print(a);

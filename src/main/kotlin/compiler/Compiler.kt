@@ -1,11 +1,16 @@
 package nl.endevelopment.compiler
 
 import codegen.CodeGenerator
+import codegen.LLVMCodeGenerator
 import nl.endevelopment.ast.Program
+import nl.endevelopment.interpreter.Interpreter
 import nl.endevelopment.lexer.RegexLexer
-import nl.endevelopment.parser.Parser
-import nl.endevelopment.semantic.SemanticAnalyzer
+import nl.endevelopment.parser.ASTBuilder
+import nl.endevelopment.parser.SlangLexer
+import nl.endevelopment.parser.SlangParser
 import nl.endevelopment.utils.Utils
+import org.antlr.v4.runtime.CharStreams
+import org.antlr.v4.runtime.CommonTokenStream
 import java.io.File
 
 class Compiler {
@@ -16,44 +21,55 @@ class Compiler {
      * @param outputIRFilePath The file path where the LLVM IR will be written.
      */
     fun compile(sourceCode: String, outputIRFilePath: String) {
+
+        val codeGenerator = LLVMCodeGenerator()
         try {
+//            // 1. Lexical Analysis
+//            val lexer = RegexLexer(sourceCode) // Assume a RegexLexer class exists
+//            val tokens = lexer.tokenize()
+//            Utils.log("Lexical Analysis Complete: ${tokens.size} tokens found.")
+//
+//            // 2. Syntax Analysis
+//            val parser = Parser(tokens) // Assume a Parser class exists
+//            val ast = parser.parse() as Program
+//            Utils.log("Syntax Analysis Complete: AST generated.")
+
+
             // 1. Lexical Analysis
-            val lexer = RegexLexer(sourceCode) // Assume a RegexLexer class exists
-            val tokens = lexer.tokenize()
-            Utils.log("Lexical Analysis Complete: ${tokens.size} tokens found.")
+            val lexer = SlangLexer(CharStreams.fromString(sourceCode))
+            val tokens = CommonTokenStream(lexer)
 
-            // 2. Syntax Analysis
-            val parser = Parser(tokens) // Assume a Parser class exists
-            val ast = parser.parse() as Program
-            Utils.log("Syntax Analysis Complete: AST generated.")
+            // 2. Parsing tokens
+            val parser = SlangParser(tokens)
+            val tree = parser.program()
 
-            // 3. Semantic Analysis
-            val semanticAnalyzer = SemanticAnalyzer()
-            semanticAnalyzer.analyze(ast)
-            Utils.log("Semantic Analysis Complete: No errors found.")
-            val semanticSymbolTable = semanticAnalyzer.getSymbolTable()
+            // 3. Building AST
+            val astBuilder = ASTBuilder()
+            val ast = astBuilder.visit(tree) as Program
 
-            // 4. Code Generation
-            val codeGenerator = CodeGenerator(semanticSymbolTable)
-            codeGenerator.generate(ast)
-            codeGenerator.writeIRToFile(outputIRFilePath)
+
+            // 4. Interpreter execution
+            val interpreter = Interpreter()
+            Utils.log("Executing with interpreter...")
+            interpreter.interpret(ast)
+
+            // 5. Code Generation
+            val ir = codeGenerator.generate(ast)
+            codeGenerator.writeIRToFile(outputIRFilePath, ir)
             Utils.log("Code Generation Complete: LLVM IR generated at '$outputIRFilePath'.")
-            // Optionally, you can also print the LLVM IR to the console
-            // codeGenerator.printIR()
+//             codeGenerator.printIR()
 
-            // 5. (Optional) Compile LLVM IR to Executable
-            // Uncomment the following lines if you wish to compile the IR immediately
-            /*
+            // 6. (Optional) Compile LLVM IR to Executable
             val executablePath = outputIRFilePath.removeSuffix(".ll") // e.g., output.ll -> output
             compileLLVMIR(outputIRFilePath, executablePath)
             Utils.log("Executable successfully compiled to '$executablePath'.")
-            */
 
             // 6. Dispose of CodeGenerator Resources
-            codeGenerator.dispose()
+//            codeGenerator.dispose()
 
         } catch (e: Exception) {
             Utils.log("Compilation Error: ${e.message}")
+//            codeGenerator.dispose()
         }
     }
 
