@@ -106,10 +106,15 @@ class Interpreter() {
             is Expr.Variable -> variableEnv.get(expr.name)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
             is Expr.Call -> callFunction(expr, allowVoid)
+            is Expr.ListLiteral -> Value.ListValue(expr.elements.map { evaluate(it, allowVoid = false) })
+            is Expr.Index -> evaluateIndex(expr)
         }
     }
 
     private fun registerFunction(stmt: Stmt.FunctionDef) {
+        if (stmt.name == "len") {
+            throw RuntimeException("Cannot redefine built-in function 'len'.")
+        }
         if (functions.containsKey(stmt.name)) {
             throw RuntimeException("Function '${stmt.name}' is already defined.")
         }
@@ -117,6 +122,9 @@ class Interpreter() {
     }
 
     private fun callFunction(expr: Expr.Call, allowVoid: Boolean): Value {
+        if (expr.name == "len") {
+            return evalLen(expr)
+        }
         val function = functions[expr.name]
             ?: throw RuntimeException("Undefined function '${expr.name}'.")
 
@@ -165,6 +173,35 @@ class Interpreter() {
         evaluate(stmt.expr, allowVoid = true)
     }
 
+    private fun evalLen(expr: Expr.Call): Value {
+        if (expr.args.size != 1) {
+            throw RuntimeException("len expects 1 argument, got ${expr.args.size}.")
+        }
+        val value = evaluate(expr.args[0], allowVoid = false)
+        return when (value) {
+            is Value.ListValue -> Value.IntValue(value.elements.size)
+            else -> throw RuntimeException("len expects a List argument.")
+        }
+    }
+
+    private fun evaluateIndex(expr: Expr.Index): Value {
+        val target = evaluate(expr.target, allowVoid = false)
+        val indexValue = evaluate(expr.index, allowVoid = false)
+        if (indexValue !is Value.IntValue) {
+            throw RuntimeException("List index must be an Int.")
+        }
+        return when (target) {
+            is Value.ListValue -> {
+                val idx = indexValue.value
+                if (idx < 0 || idx >= target.elements.size) {
+                    throw RuntimeException("List index out of bounds: $idx.")
+                }
+                target.elements[idx]
+            }
+            else -> throw RuntimeException("Indexing is only supported on Lists.")
+        }
+    }
+
     private fun validateReturnType(expected: nl.endevelopment.semantic.Type, value: Value) {
         when (expected) {
             nl.endevelopment.semantic.Type.INT -> if (value !is Value.IntValue) {
@@ -178,6 +215,9 @@ class Interpreter() {
             }
             nl.endevelopment.semantic.Type.STRING -> if (value !is Value.StringValue) {
                 throw RuntimeException("Function return type mismatch. Expected String.")
+            }
+            nl.endevelopment.semantic.Type.LIST -> if (value !is Value.ListValue) {
+                throw RuntimeException("Function return type mismatch. Expected List.")
             }
             nl.endevelopment.semantic.Type.VOID -> if (value !is Value.VoidValue) {
                 throw RuntimeException("Function return type mismatch. Expected void.")
@@ -343,6 +383,7 @@ class Interpreter() {
             is Value.FloatValue -> value.value.toString()
             is Value.BoolValue -> value.value.toString()
             is Value.StringValue -> value.value
+            is Value.ListValue -> value.elements.joinToString(prefix = "[", postfix = "]") { valueToString(it) }
             is Value.VoidValue -> "void"
         }
     }

@@ -11,6 +11,8 @@ sealed class Expr : ASTNode() {
     data class Variable(val name: String) : Expr()
     data class BinaryOp(val left: Expr, val operator: String, val right: Expr) : Expr()
     data class Call(val name: String, val args: List<Expr>) : Expr()
+    data class ListLiteral(val elements: List<Expr>) : Expr()
+    data class Index(val target: Expr, val index: Expr) : Expr()
 }
 
 

@@ -122,6 +122,12 @@ class LLVMCodeGenerator {
             is Expr.Call -> {
                 throw Exception("Function calls are not supported in this legacy code generator.")
             }
+            is Expr.ListLiteral -> {
+                throw Exception("List literals are not supported in this legacy code generator.")
+            }
+            is Expr.Index -> {
+                throw Exception("List indexing is not supported in this legacy code generator.")
+            }
         }
     }
 
@@ -131,6 +137,7 @@ class LLVMCodeGenerator {
             Type.FLOAT -> "float"
             Type.BOOL -> "i1"
             Type.STRING -> "i8*"
+            Type.LIST -> throw Exception("List type is not supported in this legacy code generator.")
             Type.VOID -> "void"
         }
     }

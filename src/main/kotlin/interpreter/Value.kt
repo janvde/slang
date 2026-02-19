@@ -6,5 +6,6 @@ sealed class Value {
     data class FloatValue(val value: Float) : Value()
     data class BoolValue(val value: Boolean) : Value()
     data class StringValue(val value: String) : Value()
+    data class ListValue(val elements: List<Value>) : Value()
     object VoidValue : Value()
 }

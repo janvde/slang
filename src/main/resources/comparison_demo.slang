@@ -58,3 +58,6 @@ fn add(a: Int, b: Int): Int {
 
 let x: Int = add(2, 3);
 print(x);
+
+let xs: List = [1, 2, 3];
+print(xs);

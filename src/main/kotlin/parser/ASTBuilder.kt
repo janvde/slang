@@ -22,6 +22,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             "String" -> Type.STRING
             "Bool" -> Type.BOOL
             "Void" -> Type.VOID
+            "List" -> Type.LIST
             else -> throw RuntimeException("Unknown type: ${ctx.type().text}")
         }
         val expr = visit(ctx.expr()) as Expr
@@ -53,6 +54,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
                 "String" -> Type.STRING
                 "Bool" -> Type.BOOL
                 "Void" -> Type.VOID
+                "List" -> Type.LIST
                 else -> throw RuntimeException("Unknown type: ${it.type().text}")
             }
             Param(paramName, paramType)
@@ -62,6 +64,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             "String" -> Type.STRING
             "Bool" -> Type.BOOL
             "Void" -> Type.VOID
+            "List" -> Type.LIST
             else -> throw RuntimeException("Unknown type: ${ctx.type().text}")
         }
         val body = ctx.block().statement().map { visit(it) as Stmt }
@@ -115,6 +118,17 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
         return Expr.Call(name, args)
+    }
+
+    override fun visitListExpr(ctx: SlangParser.ListExprContext): ASTNode {
+        val elements = ctx.listLiteral().expr().map { visit(it) as Expr }
+        return Expr.ListLiteral(elements)
+    }
+
+    override fun visitIndexExpr(ctx: SlangParser.IndexExprContext): ASTNode {
+        val target = visit(ctx.expr(0)) as Expr
+        val index = visit(ctx.expr(1)) as Expr
+        return Expr.Index(target, index)
     }
 
     override fun visitNumberExpr(ctx: SlangParser.NumberExprContext): ASTNode {

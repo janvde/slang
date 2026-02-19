@@ -5,6 +5,7 @@ enum class Type {
     FLOAT,
     BOOL,
     STRING,
+    LIST,
     VOID
 }
 

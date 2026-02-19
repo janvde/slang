@@ -57,18 +57,24 @@ block
     ;
 
 expr
-    : expr op=('*'|'/') expr         # MulDivExpr
+    : expr '[' expr ']'              # IndexExpr
+    | expr op=('*'|'/') expr         # MulDivExpr
     | expr op=('+'|'-') expr         # AddSubExpr
     | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
     | expr op=('=='|'!=') expr       # EqualityExpr
     | '(' expr ')'                   # ParenExpr
     | IDENT '(' argList? ')'         # CallExpr
+    | listLiteral                    # ListExpr
     | NUMBER                         # NumberExpr
     | IDENT                          # VariableExpr
     ;
 
 argList
     : expr (',' expr)*
+    ;
+
+listLiteral
+    : '[' (expr (',' expr)*)? ']'
     ;
 
 // Lexer Rules
@@ -78,6 +84,7 @@ type
     | 'String'
     | 'Bool'
     | 'Void'
+    | 'List'
     ;
 
 IDENT

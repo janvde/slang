@@ -12,7 +12,7 @@ class CodeGenerator() {
     private val context: LLVMContextRef = LLVMContextCreate()
     private val module: LLVMModuleRef = LLVMModuleCreateWithNameInContext("my_module", context)
     private val builder: LLVMBuilderRef = LLVMCreateBuilderInContext(context)
-    private var codegenSymbolTable = mutableMapOf<String, LLVMValueRef>() // Maps variable names to LLVMValueRef
+    private var codegenSymbolTable = mutableMapOf<String, SymbolInfo>() // Maps variable names to type + pointer
 
     // Predefined format strings
     private val formatStrings: MutableMap<Type, LLVMValueRef> = mutableMapOf()
@@ -21,6 +21,7 @@ class CodeGenerator() {
     private lateinit var printfFuncType: LLVMTypeRef
     private val functions = mutableMapOf<String, FunctionInfo>()
     private var currentFunctionReturnType: Type? = null
+    private val listStructType: LLVMTypeRef = LLVMStructCreateNamed(context, "List")
 
     private data class FunctionInfo(
         val name: String,
@@ -30,6 +31,11 @@ class CodeGenerator() {
         val llvmType: LLVMTypeRef
     )
 
+    private data class SymbolInfo(
+        val type: Type,
+        val ptr: LLVMValueRef
+    )
+
 
     init {
         // Initialize LLVM components
@@ -37,10 +43,19 @@ class CodeGenerator() {
         LLVMInitializeNativeAsmPrinter()
         LLVMInitializeNativeAsmParser()
 
+        declareListType()
+
         // Declare external functions like printf
         declarePrintf()
 
         declareFormatStrings()
+    }
+
+    private fun declareListType() {
+        val elements = PointerPointer<LLVMTypeRef>(2)
+        elements.put(0L, LLVMInt64TypeInContext(context))
+        elements.put(1L, LLVMPointerType(LLVMInt32TypeInContext(context), 0))
+        LLVMStructSetBody(listStructType, elements, 2, 0)
     }
 
     fun generate(program: Program) {
@@ -106,6 +121,7 @@ class CodeGenerator() {
             Type.FLOAT -> LLVMFloatTypeInContext(context)
             Type.BOOL -> LLVMInt1TypeInContext(context)
             Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            Type.LIST -> LLVMPointerType(listStructType, 0)
             Type.VOID -> LLVMVoidTypeInContext(context)
         }
         // Allocate space for the variable (i32)
@@ -113,7 +129,7 @@ class CodeGenerator() {
         // Store the value
         LLVMBuildStore(builder, exprValue, varPtr)
         // Update symbol table
-        codegenSymbolTable[stmt.name] = varPtr
+        codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr)
     }
 
 //    private fun visit(stmt: Stmt.PrintStmt) {
@@ -147,7 +163,12 @@ class CodeGenerator() {
         val printfFunc = LLVMGetNamedFunction(module, "printf") ?: declarePrintf()
 
         // Determine the type of the expression
-        val exprType = Type.INT
+        val exprType = inferExprType(stmt.expr)
+
+        if (exprType == Type.LIST) {
+            emitPrintList(exprValue, printfFunc)
+            return
+        }
 
         // Retrieve the corresponding format string
         val formatStr = formatStrings[exprType]
@@ -170,21 +191,7 @@ class CodeGenerator() {
             "fmt_ptr"
         ) ?: throw Exception("Failed to build GEP for format string")
 
-        // Prepare arguments for printf: (i8*, <type>)
-        val args = PointerPointer<LLVMValueRef>(2).apply {
-            put(0, gepFormatStr) // First argument: format string
-            put(1, exprValue)    // Second argument: value to print
-        }
-
-        // Build the call to printf using the stored function type
-        LLVMBuildCall2(
-            builder,
-            printfFuncType, // Function type: i32 (i8*, ...)
-            printfFunc,
-            args,
-            2,          // Number of arguments
-            "callprintf"
-        ) ?: throw Exception("Failed to build call to printf")
+        buildPrintfCall(printfFunc, gepFormatStr, exprValue)
     }
 
 
@@ -266,15 +273,178 @@ class CodeGenerator() {
         }
     }
 
+    private fun buildPrintfCall(
+        printfFunc: LLVMValueRef,
+        formatPtr: LLVMValueRef,
+        value: LLVMValueRef
+    ) {
+        val args = PointerPointer<LLVMValueRef>(2).apply {
+            put(0, formatPtr)
+            put(1, value)
+        }
+
+        LLVMBuildCall2(
+            builder,
+            printfFuncType,
+            printfFunc,
+            args,
+            2,
+            "callprintf"
+        ) ?: throw Exception("Failed to build call to printf")
+    }
+
+    private fun emitPrintList(listPtr: LLVMValueRef, printfFunc: LLVMValueRef) {
+        val lenPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 0, "list_len_ptr")
+        val dataPtrPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 1, "list_data_ptr")
+
+        val lenVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenPtr, "list_len")
+        val dataPtr = LLVMBuildLoad2(
+            builder,
+            LLVMPointerType(LLVMInt32TypeInContext(context), 0),
+            dataPtrPtr,
+            "list_data"
+        )
+
+        val currentBlock = LLVMGetInsertBlock(builder)
+        val parentFunction = LLVMGetBasicBlockParent(currentBlock)
+
+        val loopBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "list_loop")
+        val bodyBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "list_body")
+        val afterBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "list_after")
+
+        val indexPtr = LLVMBuildAlloca(builder, LLVMInt64TypeInContext(context), "list_index")
+        LLVMBuildStore(builder, LLVMConstInt(LLVMInt64TypeInContext(context), 0, 0), indexPtr)
+        LLVMBuildBr(builder, loopBlock)
+
+        LLVMPositionBuilderAtEnd(builder, loopBlock)
+        val indexVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), indexPtr, "list_index_val")
+        val loopCond = LLVMBuildICmp(builder, LLVMIntSLT, indexVal, lenVal, "list_loop_cond")
+        LLVMBuildCondBr(builder, loopCond, bodyBlock, afterBlock)
+
+        LLVMPositionBuilderAtEnd(builder, bodyBlock)
+        val elemIndices = PointerPointer<LLVMValueRef>(1).apply {
+            put(0, indexVal)
+        }
+        val elemPtr = LLVMBuildGEP2(
+            builder,
+            LLVMInt32TypeInContext(context),
+            dataPtr,
+            elemIndices,
+            1,
+            "list_elem_ptr"
+        )
+        val elemVal = LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), elemPtr, "list_elem")
+
+        val formatStr = formatStrings[Type.INT]
+            ?: throw Exception("No format string found for type: ${Type.INT}")
+        val zero = LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0)
+        val indices = PointerPointer<LLVMValueRef>(2).apply {
+            put(0, zero)
+            put(1, zero)
+        }
+        val gepFormatStr = LLVMBuildGEP2(
+            builder,
+            LLVMInt8TypeInContext(context),
+            formatStr,
+            indices,
+            2,
+            "fmt_ptr"
+        ) ?: throw Exception("Failed to build GEP for format string")
+        buildPrintfCall(printfFunc, gepFormatStr, elemVal)
+
+        val nextIndex = LLVMBuildAdd(
+            builder,
+            indexVal,
+            LLVMConstInt(LLVMInt64TypeInContext(context), 1, 0),
+            "list_index_next"
+        )
+        LLVMBuildStore(builder, nextIndex, indexPtr)
+        LLVMBuildBr(builder, loopBlock)
+
+        LLVMPositionBuilderAtEnd(builder, afterBlock)
+    }
+
+    private fun buildListLiteral(expr: Expr.ListLiteral): LLVMValueRef {
+        val length = expr.elements.size
+        val lenValue = LLVMConstInt(LLVMInt64TypeInContext(context), length.toLong(), 0)
+        val dataPtr = if (length == 0) {
+            LLVMConstNull(LLVMPointerType(LLVMInt32TypeInContext(context), 0))
+        } else {
+            val arrayType = LLVMArrayType(LLVMInt32TypeInContext(context), length)
+            val arrayAlloca = LLVMBuildAlloca(builder, arrayType, "list_data")
+            expr.elements.forEachIndexed { index, element ->
+                val elemValue = visit(element)
+                val indices = PointerPointer<LLVMValueRef>(2).apply {
+                    put(0, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+                    put(1, LLVMConstInt(LLVMInt32TypeInContext(context), index.toLong(), 0))
+                }
+                val elemPtr = LLVMBuildGEP2(
+                    builder,
+                    arrayType,
+                    arrayAlloca,
+                    indices,
+                    2,
+                    "list_elem_ptr"
+                )
+                LLVMBuildStore(builder, elemValue, elemPtr)
+            }
+
+            val dataIndices = PointerPointer<LLVMValueRef>(2).apply {
+                put(0, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+                put(1, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+            }
+            LLVMBuildGEP2(
+                builder,
+                arrayType,
+                arrayAlloca,
+                dataIndices,
+                2,
+                "list_data_ptr"
+            )
+        }
+
+        val listAlloca = LLVMBuildAlloca(builder, listStructType, "list_struct")
+        val lenPtr = LLVMBuildStructGEP2(builder, listStructType, listAlloca, 0, "list_len_ptr")
+        LLVMBuildStore(builder, lenValue, lenPtr)
+        val dataPtrPtr = LLVMBuildStructGEP2(builder, listStructType, listAlloca, 1, "list_data_ptr")
+        LLVMBuildStore(builder, dataPtr, dataPtrPtr)
+
+        return listAlloca
+    }
+
+    private fun inferExprType(expr: Expr): Type {
+        return when (expr) {
+            is Expr.Number -> Type.INT
+            is Expr.Variable -> codegenSymbolTable[expr.name]?.type
+                ?: throw Exception("Undefined variable during type inference: ${expr.name}")
+            is Expr.Call -> {
+                if (expr.name == "len") {
+                    Type.INT
+                } else {
+                    functions[expr.name]?.returnType
+                        ?: throw Exception("Undefined function during type inference: ${expr.name}")
+                }
+            }
+            is Expr.ListLiteral -> Type.LIST
+            is Expr.Index -> Type.INT
+            is Expr.BinaryOp -> when (expr.operator) {
+                ">", "<", ">=", "<=", "==", "!=" -> Type.BOOL
+                else -> Type.INT
+            }
+        }
+    }
+
     fun visit(expr: Expr): LLVMValueRef {
         return when (expr) {
             is Expr.Number -> LLVMConstInt(LLVMInt32TypeInContext(context), expr.value.toLong(), 0)
             is Expr.Variable -> {
-                val varPtr = codegenSymbolTable[expr.name]
+                val symbol = codegenSymbolTable[expr.name]
                     ?: throw Exception("Undefined variable during code generation: ${expr.name}")
-                LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), varPtr, expr.name)
+                LLVMBuildLoad2(builder, llvmTypeFor(symbol.type), symbol.ptr, expr.name)
             }
             is Expr.Call -> buildCall(expr, allowVoid = false)
+            is Expr.ListLiteral -> buildListLiteral(expr)
+            is Expr.Index -> buildIndexExpr(expr)
 
             is Expr.BinaryOp -> {
                 val left = visit(expr.left)
@@ -297,6 +467,13 @@ class CodeGenerator() {
     }
 
     private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {
+        if (expr.name == "len") {
+            if (expr.args.size != 1) {
+                throw Exception("len expects 1 argument, got ${expr.args.size}.")
+            }
+            val argValue = visit(expr.args[0])
+            return buildListLength(argValue)
+        }
         val info = functions[expr.name]
             ?: throw Exception("Undefined function during code generation: ${expr.name}")
 
@@ -323,9 +500,45 @@ class CodeGenerator() {
         return callValue
     }
 
+    private fun buildListLength(listPtr: LLVMValueRef): LLVMValueRef {
+        val lenPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 0, "list_len_ptr")
+        val lenVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenPtr, "list_len")
+        return LLVMBuildTrunc(builder, lenVal, LLVMInt32TypeInContext(context), "list_len_i32")
+    }
+
+    private fun buildIndexExpr(expr: Expr.Index): LLVMValueRef {
+        val listPtr = visit(expr.target)
+        val indexValue = visit(expr.index)
+        val dataPtrPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 1, "list_data_ptr")
+        val dataPtr = LLVMBuildLoad2(
+            builder,
+            LLVMPointerType(LLVMInt32TypeInContext(context), 0),
+            dataPtrPtr,
+            "list_data"
+        )
+        val elemIndices = PointerPointer<LLVMValueRef>(1).apply {
+            put(0, indexValue)
+        }
+        val elemPtr = LLVMBuildGEP2(
+            builder,
+            LLVMInt32TypeInContext(context),
+            dataPtr,
+            elemIndices,
+            1,
+            "list_elem_ptr"
+        )
+        return LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), elemPtr, "list_elem")
+    }
+
     private fun declareFunction(stmt: Stmt.FunctionDef) {
         if (functions.containsKey(stmt.name)) {
             throw Exception("Function '${stmt.name}' already declared.")
+        }
+        if (stmt.name == "len") {
+            throw Exception("Cannot redefine built-in function 'len'.")
+        }
+        if (stmt.returnType == Type.LIST) {
+            throw Exception("List return types are not supported in LLVM codegen yet.")
         }
 
         val returnType = llvmTypeFor(stmt.returnType)
@@ -371,7 +584,7 @@ class CodeGenerator() {
             val paramValue = LLVMGetParam(info.llvmFunc, index)
             val paramPtr = LLVMBuildAlloca(builder, llvmTypeFor(param.type), param.name)
             LLVMBuildStore(builder, paramValue, paramPtr)
-            codegenSymbolTable[param.name] = paramPtr
+            codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr)
         }
 
         stmt.body.forEach { statement ->
@@ -387,6 +600,7 @@ class CodeGenerator() {
                 Type.FLOAT -> LLVMBuildRet(builder, LLVMConstReal(LLVMFloatTypeInContext(context), 0.0))
                 Type.BOOL -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
                 Type.STRING -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(context), 0)))
+                Type.LIST -> throw Exception("List return type is not supported in LLVM codegen yet.")
             }
         }
 
@@ -400,6 +614,7 @@ class CodeGenerator() {
             Type.FLOAT -> LLVMFloatTypeInContext(context)
             Type.BOOL -> LLVMInt1TypeInContext(context)
             Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            Type.LIST -> LLVMPointerType(listStructType, 0)
             Type.VOID -> LLVMVoidTypeInContext(context)
         }
     }
