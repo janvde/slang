@@ -51,3 +51,10 @@ let result: Int = (5 + 5) * 2;
 if (result == 20) {
     print(100);
 }
+
+fn add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+let x: Int = add(2, 3);
+print(x);

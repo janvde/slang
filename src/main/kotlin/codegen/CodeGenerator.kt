@@ -12,13 +12,23 @@ class CodeGenerator() {
     private val context: LLVMContextRef = LLVMContextCreate()
     private val module: LLVMModuleRef = LLVMModuleCreateWithNameInContext("my_module", context)
     private val builder: LLVMBuilderRef = LLVMCreateBuilderInContext(context)
-    private val codegenSymbolTable = mutableMapOf<String, LLVMValueRef>() // Maps variable names to LLVMValueRef
+    private var codegenSymbolTable = mutableMapOf<String, LLVMValueRef>() // Maps variable names to LLVMValueRef
 
     // Predefined format strings
     private val formatStrings: MutableMap<Type, LLVMValueRef> = mutableMapOf()
 
     // Store function types for later use in calls
     private lateinit var printfFuncType: LLVMTypeRef
+    private val functions = mutableMapOf<String, FunctionInfo>()
+    private var currentFunctionReturnType: Type? = null
+
+    private data class FunctionInfo(
+        val name: String,
+        val returnType: Type,
+        val paramTypes: List<Type>,
+        val llvmFunc: LLVMValueRef,
+        val llvmType: LLVMTypeRef
+    )
 
 
     init {
@@ -34,6 +44,14 @@ class CodeGenerator() {
     }
 
     fun generate(program: Program) {
+        // Declare function signatures first
+        program.statements.filterIsInstance<Stmt.FunctionDef>()
+            .forEach { declareFunction(it) }
+
+        // Generate function bodies
+        program.statements.filterIsInstance<Stmt.FunctionDef>()
+            .forEach { generateFunctionBody(it) }
+
         // Define main function
         val mainFuncType = LLVMFunctionType(
             LLVMInt32TypeInContext(context), // Return type: i32
@@ -45,11 +63,28 @@ class CodeGenerator() {
         val entry = LLVMAppendBasicBlockInContext(context, mainFunction, "entry")
         LLVMPositionBuilderAtEnd(builder, entry)
 
+        val previousSymbols = codegenSymbolTable
+        codegenSymbolTable = mutableMapOf()
+
+        val previousReturnType = currentFunctionReturnType
+        currentFunctionReturnType = Type.INT
+
         // Generate code for each statement
-        program.statements.forEach { visit(it) }
+        program.statements.forEach {
+            if (it !is Stmt.FunctionDef) {
+                if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+                    visit(it)
+                }
+            }
+        }
 
         // Return 0
-        LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+        }
+
+        currentFunctionReturnType = previousReturnType
+        codegenSymbolTable = previousSymbols
     }
 
     fun visit(stmt: Stmt) {
@@ -57,6 +92,9 @@ class CodeGenerator() {
             is Stmt.IfStmt -> visit(stmt)
             is Stmt.LetStmt -> visit(stmt)
             is Stmt.PrintStmt -> visit(stmt)
+            is Stmt.FunctionDef -> {}
+            is Stmt.ReturnStmt -> visit(stmt)
+            is Stmt.ExprStmt -> visit(stmt)
         }
     }
 
@@ -184,15 +222,48 @@ class CodeGenerator() {
         // Then block
         LLVMPositionBuilderAtEnd(builder, thenBlock)
         stmt.thenBranch.forEach { visit(it) }
-        LLVMBuildBr(builder, mergeBlock)
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildBr(builder, mergeBlock)
+        }
 
         // Else block
         LLVMPositionBuilderAtEnd(builder, elseBlock)
         stmt.elseBranch?.forEach { visit(it) }
-        LLVMBuildBr(builder, mergeBlock)
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildBr(builder, mergeBlock)
+        }
 
         // Merge block
         LLVMPositionBuilderAtEnd(builder, mergeBlock)
+    }
+
+    private fun visit(stmt: Stmt.ReturnStmt) {
+        val expectedReturnType = currentFunctionReturnType
+            ?: throw Exception("Return statement is only valid inside a function.")
+        val returnValue = stmt.expr?.let { visit(it) }
+
+        if (expectedReturnType == Type.VOID) {
+            if (returnValue != null) {
+                throw Exception("Void function should not return a value.")
+            }
+            LLVMBuildRetVoid(builder)
+        } else {
+            if (returnValue == null) {
+                throw Exception("Non-void function must return a value.")
+            }
+            LLVMBuildRet(builder, returnValue)
+        }
+    }
+
+    private fun visit(stmt: Stmt.ExprStmt) {
+        when (val expr = stmt.expr) {
+            is Expr.Call -> {
+                buildCall(expr, allowVoid = true)
+            }
+            else -> {
+                visit(expr)
+            }
+        }
     }
 
     fun visit(expr: Expr): LLVMValueRef {
@@ -203,6 +274,7 @@ class CodeGenerator() {
                     ?: throw Exception("Undefined variable during code generation: ${expr.name}")
                 LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), varPtr, expr.name)
             }
+            is Expr.Call -> buildCall(expr, allowVoid = false)
 
             is Expr.BinaryOp -> {
                 val left = visit(expr.left)
@@ -221,6 +293,114 @@ class CodeGenerator() {
                     else -> throw Exception("Unknown operator: ${expr.operator}")
                 }
             }
+        }
+    }
+
+    private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {
+        val info = functions[expr.name]
+            ?: throw Exception("Undefined function during code generation: ${expr.name}")
+
+        if (expr.args.size != info.paramTypes.size) {
+            throw Exception("Function '${expr.name}' expects ${info.paramTypes.size} arguments, got ${expr.args.size}.")
+        }
+        if (!allowVoid && info.returnType == Type.VOID) {
+            throw Exception("Cannot use void function '${expr.name}' in an expression.")
+        }
+
+        val args = PointerPointer<LLVMValueRef>(expr.args.size.toLong())
+        expr.args.forEachIndexed { index, arg ->
+            args.put(index.toLong(), visit(arg))
+        }
+
+        val callValue = LLVMBuildCall2(
+            builder,
+            info.llvmType,
+            info.llvmFunc,
+            args,
+            expr.args.size,
+            "calltmp"
+        ) ?: throw Exception("Failed to build call for function '${expr.name}'.")
+        return callValue
+    }
+
+    private fun declareFunction(stmt: Stmt.FunctionDef) {
+        if (functions.containsKey(stmt.name)) {
+            throw Exception("Function '${stmt.name}' already declared.")
+        }
+
+        val returnType = llvmTypeFor(stmt.returnType)
+        val paramTypes = stmt.params.map { llvmTypeFor(it.type) }
+
+        val paramPointer = if (paramTypes.isEmpty()) {
+            PointerPointer<LLVMTypeRef>(0)
+        } else {
+            val paramsPtr = PointerPointer<LLVMTypeRef>(paramTypes.size.toLong())
+            paramTypes.forEachIndexed { index, llvmType -> paramsPtr.put(index.toLong(), llvmType) }
+            paramsPtr
+        }
+
+        val fnType = LLVMFunctionType(
+            returnType,
+            paramPointer,
+            paramTypes.size,
+            0
+        )
+        val fn = LLVMAddFunction(module, stmt.name, fnType)
+        functions[stmt.name] = FunctionInfo(
+            name = stmt.name,
+            returnType = stmt.returnType,
+            paramTypes = stmt.params.map { it.type },
+            llvmFunc = fn,
+            llvmType = fnType
+        )
+    }
+
+    private fun generateFunctionBody(stmt: Stmt.FunctionDef) {
+        val info = functions[stmt.name] ?: throw Exception("Missing function info for '${stmt.name}'.")
+        val entry = LLVMAppendBasicBlockInContext(context, info.llvmFunc, "entry")
+        LLVMPositionBuilderAtEnd(builder, entry)
+
+        val previousReturnType = currentFunctionReturnType
+        currentFunctionReturnType = stmt.returnType
+
+        val previousSymbols = codegenSymbolTable
+        codegenSymbolTable = mutableMapOf()
+
+        // Map parameters to allocas for local variable access
+        stmt.params.forEachIndexed { index, param ->
+            val paramValue = LLVMGetParam(info.llvmFunc, index)
+            val paramPtr = LLVMBuildAlloca(builder, llvmTypeFor(param.type), param.name)
+            LLVMBuildStore(builder, paramValue, paramPtr)
+            codegenSymbolTable[param.name] = paramPtr
+        }
+
+        stmt.body.forEach { statement ->
+            if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+                visit(statement)
+            }
+        }
+
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            when (stmt.returnType) {
+                Type.VOID -> LLVMBuildRetVoid(builder)
+                Type.INT -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+                Type.FLOAT -> LLVMBuildRet(builder, LLVMConstReal(LLVMFloatTypeInContext(context), 0.0))
+                Type.BOOL -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
+                Type.STRING -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(context), 0)))
+            }
+        }
+
+        currentFunctionReturnType = previousReturnType
+        codegenSymbolTable = previousSymbols
+    }
+
+    private fun llvmTypeFor(type: Type): LLVMTypeRef {
+        return when (type) {
+            Type.INT -> LLVMInt32TypeInContext(context)
+            Type.FLOAT -> LLVMFloatTypeInContext(context)
+            Type.BOOL -> LLVMInt1TypeInContext(context)
+            Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            Type.VOID -> LLVMVoidTypeInContext(context)
         }
     }
 

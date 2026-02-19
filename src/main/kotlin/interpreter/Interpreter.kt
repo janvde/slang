@@ -8,6 +8,10 @@ import nl.endevelopment.ast.Stmt
 class Interpreter() {
 
     private val variableEnv = VariableEnvironment()
+    private val functions = mutableMapOf<String, Stmt.FunctionDef>()
+    private var functionDepth = 0
+
+    private class ReturnSignal(val value: Value) : RuntimeException(null, null, false, false)
 
     /**
      * Starts interpreting the given program.
@@ -16,7 +20,13 @@ class Interpreter() {
         // Initialize global scope for variable values
         variableEnv.enterScope()
         try {
-            executeBlock(program.statements)
+            // Register function definitions first
+            program.statements.filterIsInstance<Stmt.FunctionDef>()
+                .forEach { registerFunction(it) }
+
+            // Execute top-level statements (excluding function definitions)
+            program.statements.filterNot { it is Stmt.FunctionDef }
+                .forEach { execute(it) }
         } catch (e: RuntimeException) {
             println("Runtime Error: ${e.message}")
         } finally {
@@ -41,6 +51,9 @@ class Interpreter() {
             is Stmt.LetStmt -> handleLetStmt(stmt)
             is Stmt.PrintStmt -> handlePrintStmt(stmt)
             is Stmt.IfStmt -> handleIfStmt(stmt)
+            is Stmt.FunctionDef -> registerFunction(stmt)
+            is Stmt.ReturnStmt -> handleReturnStmt(stmt)
+            is Stmt.ExprStmt -> handleExprStmt(stmt)
         }
     }
 
@@ -49,7 +62,7 @@ class Interpreter() {
      */
     private fun handleLetStmt(stmt: Stmt.LetStmt) {
         // Evaluate the expression
-        val value = evaluate(stmt.expr)
+        val value = evaluate(stmt.expr, allowVoid = false)
 
         // Define the variable in the environment
         variableEnv.define(stmt.name, value)
@@ -59,7 +72,7 @@ class Interpreter() {
      * Handles print statements.
      */
     private fun handlePrintStmt(stmt: Stmt.PrintStmt) {
-        val value = evaluate(stmt.expr)
+        val value = evaluate(stmt.expr, allowVoid = false)
         println(valueToString(value))
     }
 
@@ -67,7 +80,7 @@ class Interpreter() {
      * Handles if statements with optional else branches.
      */
     private fun handleIfStmt(stmt: Stmt.IfStmt) {
-        val conditionValue = evaluate(stmt.condition)
+        val conditionValue = evaluate(stmt.condition, allowVoid = false)
         val conditionResult = evaluateCondition(conditionValue)
 
         // Enter a new scope for the branch
@@ -87,11 +100,88 @@ class Interpreter() {
     /**
      * Evaluates an expression and returns its value.
      */
-    private fun evaluate(expr: Expr): Value {
+    private fun evaluate(expr: Expr, allowVoid: Boolean = false): Value {
         return when (expr) {
             is Expr.Number -> Value.IntValue(expr.value)
             is Expr.Variable -> variableEnv.get(expr.name)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
+            is Expr.Call -> callFunction(expr, allowVoid)
+        }
+    }
+
+    private fun registerFunction(stmt: Stmt.FunctionDef) {
+        if (functions.containsKey(stmt.name)) {
+            throw RuntimeException("Function '${stmt.name}' is already defined.")
+        }
+        functions[stmt.name] = stmt
+    }
+
+    private fun callFunction(expr: Expr.Call, allowVoid: Boolean): Value {
+        val function = functions[expr.name]
+            ?: throw RuntimeException("Undefined function '${expr.name}'.")
+
+        if (expr.args.size != function.params.size) {
+            throw RuntimeException("Function '${expr.name}' expects ${function.params.size} arguments, got ${expr.args.size}.")
+        }
+        if (!allowVoid && function.returnType == nl.endevelopment.semantic.Type.VOID) {
+            throw RuntimeException("Cannot use void function '${expr.name}' in an expression.")
+        }
+
+        val argValues = expr.args.map { evaluate(it, allowVoid = false) }
+
+        functionDepth++
+        variableEnv.enterScope()
+        try {
+            function.params.forEachIndexed { index, param ->
+                variableEnv.define(param.name, argValues[index])
+            }
+            try {
+                executeBlock(function.body)
+            } catch (signal: ReturnSignal) {
+                validateReturnType(function.returnType, signal.value)
+                return signal.value
+            }
+        } finally {
+            variableEnv.exitScope()
+            functionDepth--
+        }
+
+        val defaultValue = Value.VoidValue
+        if (function.returnType != nl.endevelopment.semantic.Type.VOID) {
+            throw RuntimeException("Function '${function.name}' must return a value.")
+        }
+        return defaultValue
+    }
+
+    private fun handleReturnStmt(stmt: Stmt.ReturnStmt) {
+        if (functionDepth <= 0) {
+            throw RuntimeException("Return statement is only allowed inside a function.")
+        }
+        val value = stmt.expr?.let { evaluate(it, allowVoid = false) } ?: Value.VoidValue
+        throw ReturnSignal(value)
+    }
+
+    private fun handleExprStmt(stmt: Stmt.ExprStmt) {
+        evaluate(stmt.expr, allowVoid = true)
+    }
+
+    private fun validateReturnType(expected: nl.endevelopment.semantic.Type, value: Value) {
+        when (expected) {
+            nl.endevelopment.semantic.Type.INT -> if (value !is Value.IntValue) {
+                throw RuntimeException("Function return type mismatch. Expected Int.")
+            }
+            nl.endevelopment.semantic.Type.FLOAT -> if (value !is Value.FloatValue) {
+                throw RuntimeException("Function return type mismatch. Expected Float.")
+            }
+            nl.endevelopment.semantic.Type.BOOL -> if (value !is Value.BoolValue) {
+                throw RuntimeException("Function return type mismatch. Expected Bool.")
+            }
+            nl.endevelopment.semantic.Type.STRING -> if (value !is Value.StringValue) {
+                throw RuntimeException("Function return type mismatch. Expected String.")
+            }
+            nl.endevelopment.semantic.Type.VOID -> if (value !is Value.VoidValue) {
+                throw RuntimeException("Function return type mismatch. Expected void.")
+            }
         }
     }
 
@@ -100,8 +190,8 @@ class Interpreter() {
      * Assumes that types are already verified by the SemanticAnalyzer.
      */
     private fun evaluateBinaryOp(expr: Expr.BinaryOp): Value {
-        val leftVal = evaluate(expr.left)
-        val rightVal = evaluate(expr.right)
+        val leftVal = evaluate(expr.left, allowVoid = false)
+        val rightVal = evaluate(expr.right, allowVoid = false)
 
         return when (expr.operator) {
             "+" -> add(leftVal, rightVal)

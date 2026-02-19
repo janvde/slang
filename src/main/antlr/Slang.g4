@@ -4,13 +4,20 @@ grammar Slang;
 // Parser Rules
 
 program
-    : statement* EOF
+    : topLevelStatement* EOF
+    ;
+
+topLevelStatement
+    : functionDef
+    | statement
     ;
 
 statement
     : letStmt
     | printStmt
     | ifStmt
+    | returnStmt
+    | callStmt
     ;
 
 letStmt
@@ -25,6 +32,26 @@ ifStmt
     : 'if' '(' expr ')' block ('else' block)?
     ;
 
+functionDef
+    : 'fn' IDENT '(' paramList? ')' ':' type block
+    ;
+
+paramList
+    : param (',' param)*
+    ;
+
+param
+    : IDENT ':' type
+    ;
+
+returnStmt
+    : 'return' expr? ';'
+    ;
+
+callStmt
+    : IDENT '(' argList? ')' ';'
+    ;
+
 block
     : '{' statement* '}'
     ;
@@ -35,8 +62,13 @@ expr
     | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
     | expr op=('=='|'!=') expr       # EqualityExpr
     | '(' expr ')'                   # ParenExpr
+    | IDENT '(' argList? ')'         # CallExpr
     | NUMBER                         # NumberExpr
     | IDENT                          # VariableExpr
+    ;
+
+argList
+    : expr (',' expr)*
     ;
 
 // Lexer Rules
@@ -45,6 +77,7 @@ type
     : 'Int'
     | 'String'
     | 'Bool'
+    | 'Void'
     ;
 
 IDENT

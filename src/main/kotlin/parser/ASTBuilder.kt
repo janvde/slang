@@ -2,6 +2,7 @@ package nl.endevelopment.parser
 
 import nl.endevelopment.ast.ASTNode
 import nl.endevelopment.ast.Expr
+import nl.endevelopment.ast.Param
 import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.Stmt
 import nl.endevelopment.semantic.Type
@@ -10,7 +11,7 @@ import nl.endevelopment.semantic.Type
 class ASTBuilder : SlangBaseVisitor<ASTNode>() {
 
     override fun visitProgram(ctx: SlangParser.ProgramContext): ASTNode {
-        val statements = ctx.statement().map { visit(it) as Stmt }
+        val statements = ctx.topLevelStatement().map { visit(it) as Stmt }
         return Program(statements)
     }
 
@@ -20,6 +21,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             "Int" -> Type.INT
             "String" -> Type.STRING
             "Bool" -> Type.BOOL
+            "Void" -> Type.VOID
             else -> throw RuntimeException("Unknown type: ${ctx.type().text}")
         }
         val expr = visit(ctx.expr()) as Expr
@@ -40,6 +42,41 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             null
         }
         return Stmt.IfStmt(condition, thenBranch, elseBranch)
+    }
+
+    override fun visitFunctionDef(ctx: SlangParser.FunctionDefContext): ASTNode {
+        val name = ctx.IDENT().text
+        val params = ctx.paramList()?.param()?.map {
+            val paramName = it.IDENT().text
+            val paramType = when (it.type().text) {
+                "Int" -> Type.INT
+                "String" -> Type.STRING
+                "Bool" -> Type.BOOL
+                "Void" -> Type.VOID
+                else -> throw RuntimeException("Unknown type: ${it.type().text}")
+            }
+            Param(paramName, paramType)
+        } ?: emptyList()
+        val returnType = when (ctx.type().text) {
+            "Int" -> Type.INT
+            "String" -> Type.STRING
+            "Bool" -> Type.BOOL
+            "Void" -> Type.VOID
+            else -> throw RuntimeException("Unknown type: ${ctx.type().text}")
+        }
+        val body = ctx.block().statement().map { visit(it) as Stmt }
+        return Stmt.FunctionDef(name, params, returnType, body)
+    }
+
+    override fun visitReturnStmt(ctx: SlangParser.ReturnStmtContext): ASTNode {
+        val expr = ctx.expr()?.let { visit(it) as Expr }
+        return Stmt.ReturnStmt(expr)
+    }
+
+    override fun visitCallStmt(ctx: SlangParser.CallStmtContext): ASTNode {
+        val name = ctx.IDENT().text
+        val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
+        return Stmt.ExprStmt(Expr.Call(name, args))
     }
 
     override fun visitMulDivExpr(ctx: SlangParser.MulDivExprContext): ASTNode {
@@ -72,6 +109,12 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
 
     override fun visitParenExpr(ctx: SlangParser.ParenExprContext): ASTNode {
         return visit(ctx.expr())
+    }
+
+    override fun visitCallExpr(ctx: SlangParser.CallExprContext): ASTNode {
+        val name = ctx.IDENT().text
+        val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
+        return Expr.Call(name, args)
     }
 
     override fun visitNumberExpr(ctx: SlangParser.NumberExprContext): ASTNode {

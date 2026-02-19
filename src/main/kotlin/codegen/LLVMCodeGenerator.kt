@@ -86,6 +86,15 @@ class LLVMCodeGenerator {
                 // End if
                 llvmCode.append("$endLabel:\n")
             }
+            is Stmt.FunctionDef -> {
+                // Not supported in this legacy code generator
+            }
+            is Stmt.ReturnStmt -> {
+                // Not supported in this legacy code generator
+            }
+            is Stmt.ExprStmt -> {
+                throw Exception("Expression statements are not supported in this legacy code generator.")
+            }
         }
     }
 
@@ -109,6 +118,9 @@ class LLVMCodeGenerator {
                 val op = mapOperator(expr.operator)
                 llvmCode.append("    $resultReg = $op i32 $leftReg, $rightReg\n")
                 resultReg
+            }
+            is Expr.Call -> {
+                throw Exception("Function calls are not supported in this legacy code generator.")
             }
         }
     }
