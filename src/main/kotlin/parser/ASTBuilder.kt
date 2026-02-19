@@ -56,6 +56,20 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Expr.BinaryOp(left, operator, right)
     }
 
+    override fun visitComparisonExpr(ctx: SlangParser.ComparisonExprContext): ASTNode {
+        val left = visit(ctx.expr(0)) as Expr
+        val right = visit(ctx.expr(1)) as Expr
+        val operator = ctx.op.text
+        return Expr.BinaryOp(left, operator, right)
+    }
+
+    override fun visitEqualityExpr(ctx: SlangParser.EqualityExprContext): ASTNode {
+        val left = visit(ctx.expr(0)) as Expr
+        val right = visit(ctx.expr(1)) as Expr
+        val operator = ctx.op.text
+        return Expr.BinaryOp(left, operator, right)
+    }
+
     override fun visitParenExpr(ctx: SlangParser.ParenExprContext): ASTNode {
         return visit(ctx.expr())
     }

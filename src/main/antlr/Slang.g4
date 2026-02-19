@@ -30,8 +30,10 @@ block
     ;
 
 expr
-    : expr op=('*'|'/') expr        # MulDivExpr
-    | expr op=('+'|'-') expr        # AddSubExpr
+    : expr op=('*'|'/') expr         # MulDivExpr
+    | expr op=('+'|'-') expr         # AddSubExpr
+    | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
+    | expr op=('=='|'!=') expr       # EqualityExpr
     | '(' expr ')'                   # ParenExpr
     | NUMBER                         # NumberExpr
     | IDENT                          # VariableExpr

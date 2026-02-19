@@ -17,6 +17,9 @@ class CodeGenerator() {
     // Predefined format strings
     private val formatStrings: MutableMap<Type, LLVMValueRef> = mutableMapOf()
 
+    // Store function types for later use in calls
+    private lateinit var printfFuncType: LLVMTypeRef
+
 
     init {
         // Initialize LLVM components
@@ -135,13 +138,10 @@ class CodeGenerator() {
             put(1, exprValue)    // Second argument: value to print
         }
 
-        // Get the printf function type (i32 (i8*, ...))
-        val printfType = LLVMTypeOf(printfFunc)
-
-        // Build the call to printf
+        // Build the call to printf using the stored function type
         LLVMBuildCall2(
             builder,
-            printfType, // Function type: i32 (i8*, ...)
+            printfFuncType, // Function type: i32 (i8*, ...)
             printfFunc,
             args,
             2,          // Number of arguments
@@ -153,14 +153,21 @@ class CodeGenerator() {
     private fun visit(stmt: Stmt.IfStmt) {
         val condValue = visit(stmt.condition)
 
-        // Convert condition to i1 (boolean)
-        val condBool = LLVMBuildICmp(
-            builder,
-            LLVMIntNE,
-            condValue,
-            LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
-            "ifcond"
-        )
+        // Convert condition to i1 (boolean) if it's not already
+        val condBool = if (LLVMGetTypeKind(LLVMTypeOf(condValue)) == LLVMIntegerTypeKind &&
+                           LLVMGetIntTypeWidth(LLVMTypeOf(condValue)) == 1) {
+            // Already i1, use it directly
+            condValue
+        } else {
+            // Need to convert i32 (or other int) to i1 by comparing to 0
+            LLVMBuildICmp(
+                builder,
+                LLVMIntNE,
+                condValue,
+                LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
+                "ifcond"
+            )
+        }
 
         // Get the current block and its parent function
         val currentBlock = LLVMGetInsertBlock(builder)
@@ -205,7 +212,12 @@ class CodeGenerator() {
                     "-" -> LLVMBuildSub(builder, left, right, "subtmp")
                     "*" -> LLVMBuildMul(builder, left, right, "multmp")
                     "/" -> LLVMBuildSDiv(builder, left, right, "divtmp")
-                    ">" -> LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp") // Signed greater than
+                    ">" -> LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp")  // Signed greater than
+                    "<" -> LLVMBuildICmp(builder, LLVMIntSLT, left, right, "cmptmp")  // Signed less than
+                    ">=" -> LLVMBuildICmp(builder, LLVMIntSGE, left, right, "cmptmp") // Signed greater or equal
+                    "<=" -> LLVMBuildICmp(builder, LLVMIntSLE, left, right, "cmptmp") // Signed less or equal
+                    "==" -> LLVMBuildICmp(builder, LLVMIntEQ, left, right, "cmptmp")  // Equal
+                    "!=" -> LLVMBuildICmp(builder, LLVMIntNE, left, right, "cmptmp")  // Not equal
                     else -> throw Exception("Unknown operator: ${expr.operator}")
                 }
             }
@@ -243,7 +255,7 @@ class CodeGenerator() {
         printfParamTypes.put(0, printfParamType)
 
         // Define the function type: i32 (i8*, ...)
-        val printfType = LLVMFunctionType(
+        printfFuncType = LLVMFunctionType(
             printfReturnType, // Return type: i32
             printfParamTypes, // Parameter types: [i8*]
             1,                // Number of parameters
@@ -251,7 +263,7 @@ class CodeGenerator() {
         )
 
         // Add the printf function to the module
-        return LLVMAddFunction(module, "printf", printfType)
+        return LLVMAddFunction(module, "printf", printfFuncType)
     }
 
 

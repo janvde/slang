@@ -1,10 +1,8 @@
 package nl.endevelopment.compiler
 
 import codegen.CodeGenerator
-import codegen.LLVMCodeGenerator
 import nl.endevelopment.ast.Program
 import nl.endevelopment.interpreter.Interpreter
-import nl.endevelopment.lexer.RegexLexer
 import nl.endevelopment.parser.ASTBuilder
 import nl.endevelopment.parser.SlangLexer
 import nl.endevelopment.parser.SlangParser
@@ -22,19 +20,8 @@ class Compiler {
      */
     fun compile(sourceCode: String, outputIRFilePath: String) {
 
-        val codeGenerator = LLVMCodeGenerator()
+        val codeGenerator = CodeGenerator()
         try {
-//            // 1. Lexical Analysis
-//            val lexer = RegexLexer(sourceCode) // Assume a RegexLexer class exists
-//            val tokens = lexer.tokenize()
-//            Utils.log("Lexical Analysis Complete: ${tokens.size} tokens found.")
-//
-//            // 2. Syntax Analysis
-//            val parser = Parser(tokens) // Assume a Parser class exists
-//            val ast = parser.parse() as Program
-//            Utils.log("Syntax Analysis Complete: AST generated.")
-
-
             // 1. Lexical Analysis
             val lexer = SlangLexer(CharStreams.fromString(sourceCode))
             val tokens = CommonTokenStream(lexer)
@@ -47,29 +34,33 @@ class Compiler {
             val astBuilder = ASTBuilder()
             val ast = astBuilder.visit(tree) as Program
 
-
             // 4. Interpreter execution
             val interpreter = Interpreter()
             Utils.log("Executing with interpreter...")
             interpreter.interpret(ast)
 
-            // 5. Code Generation
-            val ir = codeGenerator.generate(ast)
-            codeGenerator.writeIRToFile(outputIRFilePath, ir)
+            // 5. Code Generation using LLVM C API
+            codeGenerator.generate(ast)
+            codeGenerator.writeIRToFile(outputIRFilePath)
             Utils.log("Code Generation Complete: LLVM IR generated at '$outputIRFilePath'.")
-//             codeGenerator.printIR()
 
             // 6. (Optional) Compile LLVM IR to Executable
-            val executablePath = outputIRFilePath.removeSuffix(".ll") // e.g., output.ll -> output
-            compileLLVMIR(outputIRFilePath, executablePath)
-            Utils.log("Executable successfully compiled to '$executablePath'.")
+            try {
+                val executablePath = outputIRFilePath.removeSuffix(".ll")
+                compileLLVMIR(outputIRFilePath, executablePath)
+                Utils.log("Executable successfully compiled to '$executablePath'.")
+            } catch (e: Exception) {
+                Utils.log("Note: Could not compile to native executable (llc/clang not found). LLVM IR is available at '$outputIRFilePath'.")
+                Utils.log("To compile manually: llc -filetype=obj $outputIRFilePath -o ${outputIRFilePath.removeSuffix(".ll")}.o && clang ${outputIRFilePath.removeSuffix(".ll")}.o -o ${outputIRFilePath.removeSuffix(".ll")}")
+            }
 
-            // 6. Dispose of CodeGenerator Resources
-//            codeGenerator.dispose()
+            // 7. Dispose of CodeGenerator Resources
+            codeGenerator.dispose()
 
         } catch (e: Exception) {
             Utils.log("Compilation Error: ${e.message}")
-//            codeGenerator.dispose()
+            e.printStackTrace()
+            codeGenerator.dispose()
         }
     }
 

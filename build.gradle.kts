@@ -1,10 +1,17 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     kotlin("jvm") version "2.0.21"
     antlr
+    application
 }
 
 group = "nl.endevelopment"
 version = "1.0-SNAPSHOT"
+
+application {
+    mainClass.set("nl.endevelopment.MainKt")
+}
 
 repositories {
     mavenCentral()
@@ -22,7 +29,7 @@ tasks.test {
     useJUnitPlatform()
 }
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 tasks.generateGrammarSource {
@@ -48,7 +55,8 @@ tasks.withType<JavaCompile> {
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-    kotlinOptions.jvmTarget = "17"
+    compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
     // Ensure Kotlin compilation depends on ANTLR source generation
     dependsOn("generateGrammarSource")
+    dependsOn("generateTestGrammarSource")
 }

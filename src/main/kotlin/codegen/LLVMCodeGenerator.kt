@@ -23,9 +23,7 @@ class LLVMCodeGenerator {
     }
 
     fun generate(program: Program): String {
-        llvmCode.append("""
-            define i32 @main() {
-        """.trimIndent())
+        llvmCode.append("\ndefine i32 @main() {\n")
         symbolTable.enterScope()
 
         // Allocate space for variables in the global scope
@@ -33,10 +31,7 @@ class LLVMCodeGenerator {
             generateStmt(stmt)
         }
 
-        llvmCode.append("""
-            ret i32 0
-            }
-        """.trimIndent())
+        llvmCode.append("    ret i32 0\n}\n")
 
         return llvmCode.toString()
     }
