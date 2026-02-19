@@ -5,10 +5,12 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 ## Features
 
 - **Simple syntax** inspired by modern languages
-- **Type system** with Int, Float, Bool, and String types
+- **Type system** with Int, Float, Bool, String, Void, and List types
 - **Control flow** with if/else statements
 - **Comparison operators** (>, <, >=, <=, ==, !=)
 - **Arithmetic operations** with operator precedence
+- **Functions** with parameters, return values, and `return` statements
+- **List literals** with indexing (`xs[0]`) and length via `len(xs)`
 - **LLVM IR generation** for efficient compilation
 - **Native code compilation** to standalone executables
 - **Direct interpretation** for quick execution
@@ -123,12 +125,14 @@ clang output.ll -o output
 let x: Int = 10;
 let name: String = "hello";
 let flag: Bool = true;
+let xs: List = [1, 2, 3];
 ```
 
 ### Print Statement
 ```slang
 print(x);
 print(name);
+print(xs);
 ```
 
 ### Arithmetic Operations
@@ -156,6 +160,23 @@ if (condition) {
 } else {
     print(2);
 }
+```
+
+### Functions
+```slang
+fn add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+let sum: Int = add(2, 3);
+print(sum);
+```
+
+### Lists
+```slang
+let xs: List = [10, 20, 30];
+print(xs[1]);    // 20
+print(len(xs));  // 3
 ```
 
 ### Example Program
@@ -215,7 +236,6 @@ Edit `src/main/antlr/Slang.g4` and the parser will be regenerated on the next bu
 ## Future Enhancements
 
 - [ ] Loop constructs (while, for)
-- [ ] Function definitions and calls
 - [ ] Arrays and complex data types
 - [ ] Better error messages and line number tracking
 - [ ] Optimization passes
@@ -230,5 +250,4 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 - [LLVM Documentation](https://llvm.org/docs/)
 - [ANTLR Documentation](https://www.antlr.org/)
 - [JavaCPP Bindings for LLVM](https://github.com/bytedeco/javacpp-presets)
-
 
