@@ -49,6 +49,8 @@ class Interpreter() {
     private fun execute(stmt: Stmt) {
         when (stmt) {
             is Stmt.LetStmt -> handleLetStmt(stmt)
+            is Stmt.VarStmt -> handleVarStmt(stmt)
+            is Stmt.AssignStmt -> handleAssignStmt(stmt)
             is Stmt.PrintStmt -> handlePrintStmt(stmt)
             is Stmt.IfStmt -> handleIfStmt(stmt)
             is Stmt.FunctionDef -> registerFunction(stmt)
@@ -58,14 +60,27 @@ class Interpreter() {
     }
 
     /**
-     * Handles variable declaration and assignment.
+     * Handles variable declaration and assignment for let statements.
      */
     private fun handleLetStmt(stmt: Stmt.LetStmt) {
-        // Evaluate the expression
         val value = evaluate(stmt.expr, allowVoid = false)
+        variableEnv.define(stmt.name, value, immutable = true)
+    }
 
-        // Define the variable in the environment
-        variableEnv.define(stmt.name, value)
+    /**
+     * Handles variable declaration and assignment for var statements.
+     */
+    private fun handleVarStmt(stmt: Stmt.VarStmt) {
+        val value = evaluate(stmt.expr, allowVoid = false)
+        variableEnv.define(stmt.name, value, immutable = false)
+    }
+
+    /**
+     * Handles variable reassignment.
+     */
+    private fun handleAssignStmt(stmt: Stmt.AssignStmt) {
+        val value = evaluate(stmt.expr, allowVoid = false)
+        variableEnv.set(stmt.name, value)
     }
 
     /**
@@ -103,6 +118,9 @@ class Interpreter() {
     private fun evaluate(expr: Expr, allowVoid: Boolean = false): Value {
         return when (expr) {
             is Expr.Number -> Value.IntValue(expr.value)
+            is Expr.FloatLiteral -> Value.FloatValue(expr.value)
+            is Expr.BoolLiteral -> Value.BoolValue(expr.value)
+            is Expr.StringLiteral -> Value.StringValue(expr.value)
             is Expr.Variable -> variableEnv.get(expr.name)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
             is Expr.Call -> callFunction(expr, allowVoid)
@@ -256,6 +274,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value + right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value + right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() + right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value + right.value.toFloat())
             left is Value.StringValue && right is Value.StringValue -> Value.StringValue(left.value + right.value)
             else -> throw RuntimeException("Unsupported operand types for '+': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
@@ -268,6 +288,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value - right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value - right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() - right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value - right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '-': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }
@@ -279,6 +301,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value * right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value * right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() * right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value * right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '*': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }
@@ -296,6 +320,16 @@ class Interpreter() {
             left is Value.FloatValue && right is Value.FloatValue -> {
                 if (right.value == 0.0f) throw RuntimeException("Division by zero.")
                 Value.FloatValue(left.value / right.value)
+            }
+
+            left is Value.IntValue && right is Value.FloatValue -> {
+                if (right.value == 0.0f) throw RuntimeException("Division by zero.")
+                Value.FloatValue(left.value.toFloat() / right.value)
+            }
+
+            left is Value.FloatValue && right is Value.IntValue -> {
+                if (right.value == 0) throw RuntimeException("Division by zero.")
+                Value.FloatValue(left.value / right.value.toFloat())
             }
 
             else -> throw RuntimeException("Unsupported operand types for '/': ${left::class.simpleName} and ${right::class.simpleName}.")
@@ -337,6 +371,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value < right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value < right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() < right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value < right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '<': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }
@@ -348,6 +384,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value <= right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value <= right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() <= right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value <= right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '<=': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }
@@ -359,6 +397,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value > right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value > right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() > right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value > right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '>': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }
@@ -370,6 +410,8 @@ class Interpreter() {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value >= right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value >= right.value)
+            left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() >= right.value)
+            left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value >= right.value.toFloat())
             else -> throw RuntimeException("Unsupported operand types for '>=': ${left::class.simpleName} and ${right::class.simpleName}.")
         }
     }

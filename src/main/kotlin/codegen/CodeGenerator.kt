@@ -33,7 +33,8 @@ class CodeGenerator() {
 
     private data class SymbolInfo(
         val type: Type,
-        val ptr: LLVMValueRef
+        val ptr: LLVMValueRef,
+        val immutable: Boolean = true
     )
 
 
@@ -106,6 +107,8 @@ class CodeGenerator() {
         when (stmt) {
             is Stmt.IfStmt -> visit(stmt)
             is Stmt.LetStmt -> visit(stmt)
+            is Stmt.VarStmt -> visit(stmt)
+            is Stmt.AssignStmt -> visit(stmt)
             is Stmt.PrintStmt -> visit(stmt)
             is Stmt.FunctionDef -> {}
             is Stmt.ReturnStmt -> visit(stmt)
@@ -124,12 +127,36 @@ class CodeGenerator() {
             Type.LIST -> LLVMPointerType(listStructType, 0)
             Type.VOID -> LLVMVoidTypeInContext(context)
         }
-        // Allocate space for the variable (i32)
         val varPtr = LLVMBuildAlloca(builder, llvmType, stmt.name)
-        // Store the value
         LLVMBuildStore(builder, exprValue, varPtr)
-        // Update symbol table
-        codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr)
+        codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = true)
+    }
+
+    private fun visit(stmt: Stmt.VarStmt) {
+        val exprValue = visit(stmt.expr)
+        val llvmType = when (stmt.type) {
+            Type.INT -> LLVMInt32TypeInContext(context)
+            Type.FLOAT -> LLVMFloatTypeInContext(context)
+            Type.BOOL -> LLVMInt1TypeInContext(context)
+            Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
+            Type.LIST -> LLVMPointerType(listStructType, 0)
+            Type.VOID -> LLVMVoidTypeInContext(context)
+        }
+        val varPtr = LLVMBuildAlloca(builder, llvmType, stmt.name)
+        LLVMBuildStore(builder, exprValue, varPtr)
+        codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = false)
+    }
+
+    private fun visit(stmt: Stmt.AssignStmt) {
+        val symbol = codegenSymbolTable[stmt.name]
+            ?: throw Exception("Undefined variable '${stmt.name}'.")
+
+        if (symbol.immutable) {
+            throw Exception("Cannot reassign immutable variable '${stmt.name}'.")
+        }
+
+        val exprValue = visit(stmt.expr)
+        LLVMBuildStore(builder, exprValue, symbol.ptr)
     }
 
 //    private fun visit(stmt: Stmt.PrintStmt) {
@@ -415,6 +442,9 @@ class CodeGenerator() {
     private fun inferExprType(expr: Expr): Type {
         return when (expr) {
             is Expr.Number -> Type.INT
+            is Expr.FloatLiteral -> Type.FLOAT
+            is Expr.BoolLiteral -> Type.BOOL
+            is Expr.StringLiteral -> Type.STRING
             is Expr.Variable -> codegenSymbolTable[expr.name]?.type
                 ?: throw Exception("Undefined variable during type inference: ${expr.name}")
             is Expr.Call -> {
@@ -429,6 +459,12 @@ class CodeGenerator() {
             is Expr.Index -> Type.INT
             is Expr.BinaryOp -> when (expr.operator) {
                 ">", "<", ">=", "<=", "==", "!=" -> Type.BOOL
+                "+", "-", "*", "/" -> {
+                    val leftType = inferExprType(expr.left)
+                    val rightType = inferExprType(expr.right)
+                    if (leftType == Type.FLOAT || rightType == Type.FLOAT) Type.FLOAT else Type.INT
+                }
+                "%" -> Type.INT
                 else -> Type.INT
             }
         }
@@ -437,6 +473,9 @@ class CodeGenerator() {
     fun visit(expr: Expr): LLVMValueRef {
         return when (expr) {
             is Expr.Number -> LLVMConstInt(LLVMInt32TypeInContext(context), expr.value.toLong(), 0)
+            is Expr.FloatLiteral -> LLVMConstReal(LLVMFloatTypeInContext(context), expr.value.toDouble())
+            is Expr.BoolLiteral -> LLVMConstInt(LLVMInt1TypeInContext(context), if (expr.value) 1 else 0, 0)
+            is Expr.StringLiteral -> LLVMBuildGlobalStringPtr(builder, expr.value, "str")
             is Expr.Variable -> {
                 val symbol = codegenSymbolTable[expr.name]
                     ?: throw Exception("Undefined variable during code generation: ${expr.name}")
@@ -447,19 +486,42 @@ class CodeGenerator() {
             is Expr.Index -> buildIndexExpr(expr)
 
             is Expr.BinaryOp -> {
-                val left = visit(expr.left)
-                val right = visit(expr.right)
+                var left = visit(expr.left)
+                var right = visit(expr.right)
+                val leftType = inferExprType(expr.left)
+                val rightType = inferExprType(expr.right)
+
+                // Type promotion: if mixed Int/Float, promote Int to Float
+                if (leftType == Type.INT && rightType == Type.FLOAT) {
+                    left = LLVMBuildSIToFP(builder, left, LLVMFloatTypeInContext(context), "inttofloat")
+                } else if (leftType == Type.FLOAT && rightType == Type.INT) {
+                    right = LLVMBuildSIToFP(builder, right, LLVMFloatTypeInContext(context), "inttofloat")
+                }
+
+                val isFloat = (leftType == Type.FLOAT || rightType == Type.FLOAT)
+
                 when (expr.operator) {
-                    "+" -> LLVMBuildAdd(builder, left, right, "addtmp")
-                    "-" -> LLVMBuildSub(builder, left, right, "subtmp")
-                    "*" -> LLVMBuildMul(builder, left, right, "multmp")
-                    "/" -> LLVMBuildSDiv(builder, left, right, "divtmp")
-                    ">" -> LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp")  // Signed greater than
-                    "<" -> LLVMBuildICmp(builder, LLVMIntSLT, left, right, "cmptmp")  // Signed less than
-                    ">=" -> LLVMBuildICmp(builder, LLVMIntSGE, left, right, "cmptmp") // Signed greater or equal
-                    "<=" -> LLVMBuildICmp(builder, LLVMIntSLE, left, right, "cmptmp") // Signed less or equal
-                    "==" -> LLVMBuildICmp(builder, LLVMIntEQ, left, right, "cmptmp")  // Equal
-                    "!=" -> LLVMBuildICmp(builder, LLVMIntNE, left, right, "cmptmp")  // Not equal
+                    "+" -> if (isFloat) LLVMBuildFAdd(builder, left, right, "faddtmp")
+                           else LLVMBuildAdd(builder, left, right, "addtmp")
+                    "-" -> if (isFloat) LLVMBuildFSub(builder, left, right, "fsubtmp")
+                           else LLVMBuildSub(builder, left, right, "subtmp")
+                    "*" -> if (isFloat) LLVMBuildFMul(builder, left, right, "fmultmp")
+                           else LLVMBuildMul(builder, left, right, "multmp")
+                    "/" -> if (isFloat) LLVMBuildFDiv(builder, left, right, "fdivtmp")
+                           else LLVMBuildSDiv(builder, left, right, "divtmp")
+                    "%" -> LLVMBuildSRem(builder, left, right, "modtmp")
+                    ">" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOGT, left, right, "fcmptmp")
+                           else LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp")
+                    "<" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOLT, left, right, "fcmptmp")
+                           else LLVMBuildICmp(builder, LLVMIntSLT, left, right, "cmptmp")
+                    ">=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOGE, left, right, "fcmptmp")
+                            else LLVMBuildICmp(builder, LLVMIntSGE, left, right, "cmptmp")
+                    "<=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOLE, left, right, "fcmptmp")
+                            else LLVMBuildICmp(builder, LLVMIntSLE, left, right, "cmptmp")
+                    "==" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOEQ, left, right, "fcmptmp")
+                            else LLVMBuildICmp(builder, LLVMIntEQ, left, right, "cmptmp")
+                    "!=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealONE, left, right, "fcmptmp")
+                            else LLVMBuildICmp(builder, LLVMIntNE, left, right, "cmptmp")
                     else -> throw Exception("Unknown operator: ${expr.operator}")
                 }
             }

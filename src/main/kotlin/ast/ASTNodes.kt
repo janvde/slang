@@ -8,6 +8,9 @@ sealed class ASTNode
 // Expressions
 sealed class Expr : ASTNode() {
     data class Number(val value: Int) : Expr()
+    data class FloatLiteral(val value: Float) : Expr()
+    data class BoolLiteral(val value: Boolean) : Expr()
+    data class StringLiteral(val value: String) : Expr()
     data class Variable(val name: String) : Expr()
     data class BinaryOp(val left: Expr, val operator: String, val right: Expr) : Expr()
     data class Call(val name: String, val args: List<Expr>) : Expr()
@@ -19,6 +22,8 @@ sealed class Expr : ASTNode() {
 // Statements
 sealed class Stmt : ASTNode() {
     data class LetStmt(val name: String, val type: Type, val expr: Expr) : Stmt()
+    data class VarStmt(val name: String, val type: Type, val expr: Expr) : Stmt()
+    data class AssignStmt(val name: String, val expr: Expr) : Stmt()
     data class PrintStmt(val expr: Expr) : Stmt()
     data class IfStmt(val condition: Expr, val thenBranch: List<Stmt>, val elseBranch: List<Stmt>?) : Stmt()
     data class FunctionDef(

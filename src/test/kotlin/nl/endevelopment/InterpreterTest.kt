@@ -320,4 +320,237 @@ class InterpreterTest {
         val output = captureInterpreterOutput(source)
         assertEquals("", output)
     }
+
+    @Test
+    fun testModuloOperation() {
+        val source = """
+            let x: Int = 10 % 3;
+            print(x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testModuloWithExpressions() {
+        val source = """
+            let a: Int = 17;
+            let b: Int = 5;
+            let result: Int = a % b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("2", output)
+    }
+
+    @Test
+    fun testBooleanLiteralTrue() {
+        val source = """
+            let flag: Bool = true;
+            print(flag);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testBooleanLiteralFalse() {
+        val source = """
+            let flag: Bool = false;
+            print(flag);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testBooleanInIfCondition() {
+        val source = """
+            let isReady: Bool = true;
+            if (isReady) {
+                print(100);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("100", output)
+    }
+
+    @Test
+    fun testFloatLiteral() {
+        val source = """
+            let pi: Float = 3.14;
+            print(pi);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("3.14", output)
+    }
+
+    @Test
+    fun testFloatArithmetic() {
+        val source = """
+            let a: Float = 2.5;
+            let b: Float = 1.5;
+            let result: Float = a + b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("4.0", output)
+    }
+
+    @Test
+    fun testIntFloatMixedAddition() {
+        val source = """
+            let a: Int = 5;
+            let b: Float = 2.5;
+            let result: Float = a + b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("7.5", output)
+    }
+
+    @Test
+    fun testIntFloatMixedComparison() {
+        val source = """
+            let a: Int = 5;
+            let b: Float = 3.14;
+            if (a > b) {
+                print(1);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testStringLiteral() {
+        val source = """
+            let message: String = "Hello";
+            print(message);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("Hello", output)
+    }
+
+    @Test
+    fun testStringWithEscapeNewline() {
+        val source = """
+            let text: String = "Line1\nLine2";
+            print(text);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("Line1\nLine2", output)
+    }
+
+    @Test
+    fun testStringWithEscapeTab() {
+        val source = """
+            let text: String = "Col1\tCol2";
+            print(text);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("Col1\tCol2", output)
+    }
+
+    @Test
+    fun testStringConcatenation() {
+        val source = """
+            let a: String = "Hello";
+            let b: String = "World";
+            let result: String = a + b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("HelloWorld", output)
+    }
+
+    @Test
+    fun testVarDeclaration() {
+        val source = """
+            var x: Int = 5;
+            print(x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("5", output)
+    }
+
+    @Test
+    fun testVarReassignment() {
+        val source = """
+            var x: Int = 5;
+            x = 10;
+            print(x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("10", output)
+    }
+
+    @Test
+    fun testVarMultipleReassignments() {
+        val source = """
+            var x: Int = 1;
+            x = 2;
+            x = 3;
+            x = 4;
+            print(x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("4", output)
+    }
+
+    @Test
+    fun testLetImmutability() {
+        val source = """
+            let x: Int = 5;
+            x = 10;
+            print(x);
+        """.trimIndent()
+
+        val ast = parseToAST(source)
+        val interpreter = Interpreter()
+
+        val outputStream = ByteArrayOutputStream()
+        val originalOut = System.out
+        System.setOut(PrintStream(outputStream))
+        try {
+            interpreter.interpret(ast)
+            val output = outputStream.toString()
+            assertTrue(output.contains("immutable"), "Expected error about immutable variable, got: $output")
+        } finally {
+            System.setOut(originalOut)
+        }
+    }
+
+    @Test
+    fun testVarReassignmentWithExpression() {
+        val source = """
+            var x: Int = 5;
+            var y: Int = 3;
+            x = y + 2;
+            print(x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("5", output)
+    }
 }

@@ -14,6 +14,8 @@ topLevelStatement
 
 statement
     : letStmt
+    | varStmt
+    | assignStmt
     | printStmt
     | ifStmt
     | returnStmt
@@ -22,6 +24,14 @@ statement
 
 letStmt
     : 'let' IDENT ':' type '=' expr ';'
+    ;
+
+varStmt
+    : 'var' IDENT ':' type '=' expr ';'
+    ;
+
+assignStmt
+    : IDENT '=' expr ';'
     ;
 
 printStmt
@@ -57,14 +67,18 @@ block
     ;
 
 expr
-    : expr '[' expr ']'              # IndexExpr
-    | expr op=('*'|'/') expr         # MulDivExpr
+    : TRUE                           # BoolTrueExpr
+    | FALSE                          # BoolFalseExpr
+    | expr '[' expr ']'              # IndexExpr
+    | expr op=('*'|'/'|'%') expr     # MulDivExpr
     | expr op=('+'|'-') expr         # AddSubExpr
     | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
     | expr op=('=='|'!=') expr       # EqualityExpr
     | '(' expr ')'                   # ParenExpr
     | IDENT '(' argList? ')'         # CallExpr
     | listLiteral                    # ListExpr
+    | STRING_LITERAL                 # StringExpr
+    | FLOAT                          # FloatExpr
     | NUMBER                         # NumberExpr
     | IDENT                          # VariableExpr
     ;
@@ -81,14 +95,28 @@ listLiteral
 
 type
     : 'Int'
+    | 'Float'
     | 'String'
     | 'Bool'
     | 'Void'
     | 'List'
     ;
 
+TRUE : 'true';
+FALSE : 'false';
+
 IDENT
     : [a-zA-Z_][a-zA-Z_0-9]*
+    ;
+
+STRING_LITERAL
+    : '"' (~["\\\r\n] | '\\' [tnr"\\])* '"'
+    ;
+
+FLOAT
+    : [0-9]+ '.' [0-9]+
+    | [0-9]+ 'e' [+-]? [0-9]+
+    | [0-9]+ '.' [0-9]+ 'e' [+-]? [0-9]+
     ;
 
 NUMBER

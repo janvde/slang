@@ -50,6 +50,20 @@ class LLVMCodeGenerator {
                 val exprReg = generateExpr(stmt.expr)
                 llvmCode.append("    store ${llvmType} $exprReg, ${llvmType}* $varName\n")
             }
+            is Stmt.VarStmt -> {
+                val llvmType = mapType(stmt.type)
+                val varName = "%${stmt.name}"
+                llvmCode.append("    $varName = alloca $llvmType\n")
+                variableMap[stmt.name] = varName
+                val exprReg = generateExpr(stmt.expr)
+                llvmCode.append("    store ${llvmType} $exprReg, ${llvmType}* $varName\n")
+            }
+            is Stmt.AssignStmt -> {
+                val varName = variableMap[stmt.name]
+                    ?: throw Exception("Undefined variable '${stmt.name}'")
+                val exprReg = generateExpr(stmt.expr)
+                llvmCode.append("    store i32 $exprReg, i32* $varName\n")
+            }
             is Stmt.PrintStmt -> {
                 val exprReg = generateExpr(stmt.expr)
                 llvmCode.append("    call i32 (i8*, ...) @printf(i8* getelementptr ([4 x i8], [4 x i8]* @print_int, i32 0, i32 0), i32 $exprReg)\n")
@@ -102,6 +116,15 @@ class LLVMCodeGenerator {
         return when (expr) {
             is Expr.Number -> {
                 expr.value.toString()
+            }
+            is Expr.FloatLiteral -> {
+                expr.value.toString()
+            }
+            is Expr.BoolLiteral -> {
+                if (expr.value) "1" else "0"
+            }
+            is Expr.StringLiteral -> {
+                expr.value
             }
             is Expr.Variable -> {
                 val varName = variableMap[expr.name]

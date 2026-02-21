@@ -59,5 +59,8 @@ fn add(a: Int, b: Int): Int {
 let x: Int = add(2, 3);
 print(x);
 
-let xs: List = [1, 2, 3];
+let xs: List = [10, 20, 30];
 print(xs);
+print(xs[1]);     // 20
+print(len(xs));   // 3
+

@@ -19,6 +19,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val type = when (ctx.type().text) {
             "Int" -> Type.INT
+            "Float" -> Type.FLOAT
             "String" -> Type.STRING
             "Bool" -> Type.BOOL
             "Void" -> Type.VOID
@@ -27,6 +28,27 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         }
         val expr = visit(ctx.expr()) as Expr
         return Stmt.LetStmt(name, type, expr)
+    }
+
+    override fun visitVarStmt(ctx: SlangParser.VarStmtContext): ASTNode {
+        val name = ctx.IDENT().text
+        val type = when (ctx.type().text) {
+            "Int" -> Type.INT
+            "Float" -> Type.FLOAT
+            "String" -> Type.STRING
+            "Bool" -> Type.BOOL
+            "Void" -> Type.VOID
+            "List" -> Type.LIST
+            else -> throw RuntimeException("Unknown type: ${ctx.type().text}")
+        }
+        val expr = visit(ctx.expr()) as Expr
+        return Stmt.VarStmt(name, type, expr)
+    }
+
+    override fun visitAssignStmt(ctx: SlangParser.AssignStmtContext): ASTNode {
+        val name = ctx.IDENT().text
+        val expr = visit(ctx.expr()) as Expr
+        return Stmt.AssignStmt(name, expr)
     }
 
     override fun visitPrintStmt(ctx: SlangParser.PrintStmtContext): ASTNode {
@@ -51,6 +73,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             val paramName = it.IDENT().text
             val paramType = when (it.type().text) {
                 "Int" -> Type.INT
+                "Float" -> Type.FLOAT
                 "String" -> Type.STRING
                 "Bool" -> Type.BOOL
                 "Void" -> Type.VOID
@@ -61,6 +84,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         } ?: emptyList()
         val returnType = when (ctx.type().text) {
             "Int" -> Type.INT
+            "Float" -> Type.FLOAT
             "String" -> Type.STRING
             "Bool" -> Type.BOOL
             "Void" -> Type.VOID
@@ -131,8 +155,37 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Expr.Index(target, index)
     }
 
+    override fun visitStringExpr(ctx: SlangParser.StringExprContext): ASTNode {
+        val rawText = ctx.STRING_LITERAL().text
+        // Remove surrounding quotes
+        val withoutQuotes = rawText.substring(1, rawText.length - 1)
+        // Process escape sequences
+        val processed = processEscapeSequences(withoutQuotes)
+        return Expr.StringLiteral(processed)
+    }
+
+    private fun processEscapeSequences(str: String): String {
+        return str.replace("\\n", "\n")
+                  .replace("\\t", "\t")
+                  .replace("\\r", "\r")
+                  .replace("\\\"", "\"")
+                  .replace("\\\\", "\\")
+    }
+
+    override fun visitFloatExpr(ctx: SlangParser.FloatExprContext): ASTNode {
+        return Expr.FloatLiteral(ctx.FLOAT().text.toFloat())
+    }
+
     override fun visitNumberExpr(ctx: SlangParser.NumberExprContext): ASTNode {
         return Expr.Number(ctx.NUMBER().text.toInt())
+    }
+
+    override fun visitBoolTrueExpr(ctx: SlangParser.BoolTrueExprContext): ASTNode {
+        return Expr.BoolLiteral(true)
+    }
+
+    override fun visitBoolFalseExpr(ctx: SlangParser.BoolFalseExprContext): ASTNode {
+        return Expr.BoolLiteral(false)
     }
 
     override fun visitVariableExpr(ctx: SlangParser.VariableExprContext): ASTNode {
