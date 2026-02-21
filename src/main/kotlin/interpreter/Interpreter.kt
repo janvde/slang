@@ -53,9 +53,39 @@ class Interpreter() {
             is Stmt.AssignStmt -> handleAssignStmt(stmt)
             is Stmt.PrintStmt -> handlePrintStmt(stmt)
             is Stmt.IfStmt -> handleIfStmt(stmt)
+            is Stmt.WhileStmt -> handleWhileStmt(stmt)
             is Stmt.FunctionDef -> registerFunction(stmt)
             is Stmt.ReturnStmt -> handleReturnStmt(stmt)
             is Stmt.ExprStmt -> handleExprStmt(stmt)
+        }
+    }
+
+    // ...existing code...
+
+    /**
+     * Handles while loop execution.
+     */
+    private fun handleWhileStmt(stmt: Stmt.WhileStmt) {
+        variableEnv.enterScope()
+        try {
+            while (true) {
+                val conditionValue = evaluate(stmt.condition, allowVoid = false)
+                val conditionResult = evaluateCondition(conditionValue)
+
+                if (!conditionResult) {
+                    break
+                }
+
+                try {
+                    for (s in stmt.body) {
+                        execute(s)
+                    }
+                } catch (e: ReturnSignal) {
+                    throw e  // Re-throw return signal to propagate it
+                }
+            }
+        } finally {
+            variableEnv.exitScope()
         }
     }
 
@@ -122,6 +152,7 @@ class Interpreter() {
             is Expr.BoolLiteral -> Value.BoolValue(expr.value)
             is Expr.StringLiteral -> Value.StringValue(expr.value)
             is Expr.Variable -> variableEnv.get(expr.name)
+            is Expr.UnaryOp -> evaluateUnaryOp(expr)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
             is Expr.Call -> callFunction(expr, allowVoid)
             is Expr.ListLiteral -> Value.ListValue(expr.elements.map { evaluate(it, allowVoid = false) })
@@ -220,6 +251,22 @@ class Interpreter() {
         }
     }
 
+    /**
+     * Evaluates a unary operation.
+     */
+    private fun evaluateUnaryOp(expr: Expr.UnaryOp): Value {
+        val operandValue = evaluate(expr.operand, allowVoid = false)
+        return when (expr.operator) {
+            "!" -> {
+                if (operandValue !is Value.BoolValue) {
+                    throw RuntimeException("NOT operator requires Bool operand, got ${operandValue::class.simpleName}.")
+                }
+                Value.BoolValue(!operandValue.value)
+            }
+            else -> throw RuntimeException("Unknown unary operator '${expr.operator}'.")
+        }
+    }
+
     private fun validateReturnType(expected: nl.endevelopment.semantic.Type, value: Value) {
         when (expected) {
             nl.endevelopment.semantic.Type.INT -> if (value !is Value.IntValue) {
@@ -245,9 +292,41 @@ class Interpreter() {
 
     /**
      * Evaluates a binary operation expression.
-     * Assumes that types are already verified by the SemanticAnalyzer.
+     * Handles short-circuit evaluation for logical operators.
      */
     private fun evaluateBinaryOp(expr: Expr.BinaryOp): Value {
+        // Handle short-circuit logical operators
+        if (expr.operator == "&&") {
+            val leftVal = evaluate(expr.left, allowVoid = false)
+            if (leftVal !is Value.BoolValue) {
+                throw RuntimeException("AND operator requires Bool operands.")
+            }
+            if (!leftVal.value) {
+                return Value.BoolValue(false)  // Short-circuit: return false without evaluating right
+            }
+            val rightVal = evaluate(expr.right, allowVoid = false)
+            if (rightVal !is Value.BoolValue) {
+                throw RuntimeException("AND operator requires Bool operands.")
+            }
+            return Value.BoolValue(rightVal.value)
+        }
+
+        if (expr.operator == "||") {
+            val leftVal = evaluate(expr.left, allowVoid = false)
+            if (leftVal !is Value.BoolValue) {
+                throw RuntimeException("OR operator requires Bool operands.")
+            }
+            if (leftVal.value) {
+                return Value.BoolValue(true)  // Short-circuit: return true without evaluating right
+            }
+            val rightVal = evaluate(expr.right, allowVoid = false)
+            if (rightVal !is Value.BoolValue) {
+                throw RuntimeException("OR operator requires Bool operands.")
+            }
+            return Value.BoolValue(rightVal.value)
+        }
+
+        // For non-short-circuit operators, evaluate both sides
         val leftVal = evaluate(expr.left, allowVoid = false)
         val rightVal = evaluate(expr.right, allowVoid = false)
 

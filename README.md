@@ -6,14 +6,20 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 
 - **Simple syntax** inspired by modern languages
 - **Type system** with Int, Float, Bool, String, Void, and List types
-- **Control flow** with if/else statements
+- **Literals** for all types: integers, floats (with scientific notation), booleans, strings (with escape sequences)
+- **Variable mutability**: `let` (immutable) and `var` (mutable) with reassignment support
+- **Arithmetic operations** (+, -, *, /, %) with operator precedence
+- **Type promotion**: Automatic Int→Float conversion in mixed operations
+- **String operations**: Concatenation with `+` operator (interpreter only)
+- **Logical operators**: `!` (NOT), `&&` (AND), `||` (OR) with short-circuit evaluation
+- **Control flow** with if/else statements and while loops
 - **Comparison operators** (>, <, >=, <=, ==, !=)
-- **Arithmetic operations** with operator precedence
 - **Functions** with parameters, return values, and `return` statements
 - **List literals** with indexing (`xs[0]`) and length via `len(xs)`
 - **LLVM IR generation** for efficient compilation
 - **Native code compilation** to standalone executables
 - **Direct interpretation** for quick execution
+- **Compiler scripts** for easy compilation to native binaries
 
 ## Project Structure
 
@@ -70,6 +76,60 @@ source ~/.zshrc
 
 (On Intel Macs, use `/usr/local/opt/llvm/bin` instead)
 
+## Quick Start - Compile .slang to Binary
+
+The easiest way to compile Slang programs is using the included compiler scripts:
+
+### Using the Bash Script (Linux/macOS)
+```bash
+# Make script executable (first time only)
+chmod +x slangc
+
+# Compile a .slang file to binary
+./slangc src/main/resources/example.slang my_program
+
+# Compile and run immediately
+./slangc src/main/resources/example.slang --run
+
+# See all options
+./slangc --help
+```
+
+### Using the Python Script (Cross-platform)
+```bash
+# Make script executable (first time only)
+chmod +x slangc.py
+
+# Compile a .slang file to binary
+python slangc.py src/main/resources/example.slang my_program
+
+# Compile and run immediately
+python slangc.py src/main/resources/example.slang --run
+
+# See all options
+python slangc.py --help
+```
+
+### Using Make (Optional)
+```bash
+# Compile a specific file
+make compile FILE=src/main/resources/example.slang OUT=my_program
+
+# Compile and run
+make run FILE=src/main/resources/example.slang
+
+# Build the compiler
+make build
+```
+
+### Script Options
+- `--run` - Run the executable after compilation
+- `--keep-ir` - Keep intermediate LLVM IR file for inspection
+- `--verbose` - Show detailed compilation output
+- `--help` - Display full usage information
+
+For detailed documentation, see [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md).
+
 ## Building
 
 ```bash
@@ -84,7 +144,52 @@ This will:
 
 ## Running
 
-### Method 1: Run with Gradle (Recommended for development)
+### Method 1: Use Compiler Scripts (Recommended)
+
+The easiest way to compile Slang programs to native executables:
+
+**Bash Script (Linux/macOS):**
+```bash
+# Compile to binary
+./slangc input.slang output_binary
+
+# Compile and run
+./slangc input.slang --run
+
+# With options
+./slangc input.slang mybinary --keep-ir --verbose
+```
+
+**Python Script (Cross-platform):**
+```bash
+# Compile to binary
+python slangc.py input.slang output_binary
+
+# Compile and run
+python slangc.py input.slang --run
+
+# With options
+python slangc.py input.slang mybinary --keep-ir --verbose
+```
+
+**Using Make:**
+```bash
+# Compile specific file
+make compile FILE=hello.slang OUT=hello
+
+# Compile and run
+make run FILE=hello.slang
+```
+
+**Script Options:**
+- `--run` - Execute the binary after compilation
+- `--keep-ir` - Keep intermediate LLVM IR file
+- `--verbose` - Show detailed compilation output
+- `--help` - Display full usage information
+
+See [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md) for complete documentation.
+
+### Method 2: Run with Gradle (For development)
 ```bash
 ./gradlew run --args="path/to/input.slang output.ll"
 ```
@@ -120,67 +225,50 @@ clang output.ll -o output
 
 ## Language Syntax
 
-### Variable Declaration
+For complete language syntax reference, see **[LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md)**.
+
+### Quick Reference
+
+**Variables:**
 ```slang
-let x: Int = 10;
-let name: String = "hello";
-let flag: Bool = true;
-let xs: List = [1, 2, 3];
+let x: Int = 10;           // Immutable
+var counter: Int = 0;      // Mutable
+counter = 5;               // Reassignment
 ```
 
-### Print Statement
-```slang
-print(x);
-print(name);
-print(xs);
-```
-
-### Arithmetic Operations
-```slang
-let a: Int = 2 + 3 * 4;  // Result: 14 (respects operator precedence)
-let b: Int = 10 - 5;      // Result: 5
-let c: Int = 3 * 4;       // Result: 12
-let d: Int = 10 / 2;      // Result: 5
-```
-
-### Comparison Operators
+**Control Flow:**
 ```slang
 if (x > 5) { print(1); }
-if (x < 10) { print(2); }
-if (x >= 10) { print(3); }
-if (x <= 10) { print(4); }
-if (x == 10) { print(5); }
-if (x != 5) { print(6); }
-```
 
-### Control Flow
-```slang
-if (condition) {
-    print(1);
-} else {
-    print(2);
+while (i < 10) {
+    print(i);
+    i = i + 1;
 }
 ```
 
-### Functions
+**Logical Operators:**
+```slang
+!flag                      // NOT
+a && b                     // AND (short-circuit)
+a || b                     // OR (short-circuit)
+```
+
+**Functions:**
 ```slang
 fn add(a: Int, b: Int): Int {
     return a + b;
 }
-
-let sum: Int = add(2, 3);
-print(sum);
 ```
 
-### Lists
-```slang
-let xs: List = [10, 20, 30];
-print(xs[1]);    // 20
-print(len(xs));  // 3
-```
+**Data Types:** Int, Float, Bool, String, List, Void
 
-### Example Program
-See `src/main/resources/comparison_demo.slang` for a comprehensive example demonstrating all comparison operators.
+See [LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md) for:
+- Complete syntax reference
+- All operators and precedence
+- Type system details
+- Scoping rules
+- Code examples and patterns
+- Best practices
 
 ## Architecture
 
@@ -233,13 +321,147 @@ See `src/main/resources/comparison_demo.slang` for a comprehensive example demon
 ### Modifying the Grammar
 Edit `src/main/antlr/Slang.g4` and the parser will be regenerated on the next build.
 
+## Compiler Scripts
+
+Slang includes convenient compiler scripts that handle the entire compilation pipeline from `.slang` source files to native executables:
+
+### Available Scripts
+
+1. **`slangc`** - Bash script (Linux/macOS)
+   - Full-featured compilation pipeline
+   - Colorized output
+   - Automatic dependency checking
+
+2. **`slangc.py`** - Python script (Cross-platform)
+   - Works on Windows, Linux, macOS
+   - Same features as bash version
+   - Requires Python 3.6+
+
+3. **`Makefile`** - Make targets
+   - `make build` - Build the compiler
+   - `make compile FILE=...` - Compile a file
+   - `make run FILE=...` - Compile and run
+   - `make install` - Install scripts system-wide
+
+### Quick Examples
+
+```bash
+# Compile a program
+./slangc hello.slang
+
+# Compile with custom output name
+./slangc hello.slang my_program
+
+# Compile and run immediately
+./slangc hello.slang --run
+
+# Keep intermediate files for inspection
+./slangc hello.slang --keep-ir
+
+# Verbose output for debugging
+./slangc hello.slang --verbose
+```
+
+### Installation
+
+```bash
+# Local use (from project directory)
+chmod +x slangc slangc.py
+
+# System-wide installation
+sudo make install
+# Or manually:
+sudo cp slangc slangc.py /usr/local/bin/
+```
+
+### Compilation Pipeline
+
+```
+.slang source → Slang Compiler → LLVM IR → llc → Object File → clang → Native Binary
+```
+
+For complete documentation, see:
+- [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md) - Complete usage guide
+- [`COMPILER_SCRIPTS_SUMMARY.md`](COMPILER_SCRIPTS_SUMMARY.md) - Executive summary
+
+## Documentation
+
+### Language Reference
+- **[LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md)** - Complete language syntax reference
+
+### Language Features
+- [`PHASE_3_4_COMPLETE.md`](PHASE_3_4_COMPLETE.md) - Logical operators and while loops
+- [`progress-report-phases-0-2.md`](progress-report-phases-0-2.md) - Initial features implementation
+- [`FEATURES_DEMO_README.md`](FEATURES_DEMO_README.md) - Feature demonstration guide
+
+### Development
+- [`CLAUDE.md`](CLAUDE.md) - Architecture guide for AI assistants
+- [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md) - Compilation scripts documentation
+- [`resources.md`](resources.md) - Available resources and examples
+
+### Example Programs
+All example programs are in `src/main/resources/`:
+- `example.slang` - Basic arithmetic
+- `comparison_demo.slang` - Comparison operators and functions
+- `features_demo.slang` - All basic features (Phases 0-2)
+- `logical_operators_demo.slang` - Logical operators (!, &&, ||)
+- `loops_demo.slang` - While loop examples
+
+## Implemented Features
+
+### Phases 0-2: Core Features ✅
+- ✅ Modulo operator (%)
+- ✅ Boolean literals (true, false)
+- ✅ Float literals with scientific notation
+- ✅ String literals with escape sequences
+- ✅ Variable mutability (let vs var)
+- ✅ Variable reassignment
+
+### Phase 3: Logical Operators ✅
+- ✅ NOT operator (!)
+- ✅ AND operator (&&) with short-circuit evaluation
+- ✅ OR operator (||) with short-circuit evaluation
+- ✅ Strict Bool type checking
+
+### Phase 4: While Loops ✅
+- ✅ While loop construct
+- ✅ Nested loops
+- ✅ Proper variable scoping
+- ✅ Integration with all operators
+
+### Compiler Infrastructure ✅
+- ✅ Bash compilation script
+- ✅ Python compilation script
+- ✅ Makefile integration
+- ✅ Native binary generation
+- ✅ LLVM IR generation
+
 ## Future Enhancements
 
-- [ ] Loop constructs (while, for)
+- [ ] For loops
+- [ ] Break/continue statements
 - [ ] Arrays and complex data types
-- [ ] Better error messages and line number tracking
+- [ ] Better error messages with line numbers
 - [ ] Optimization passes
 - [ ] More built-in functions
+- [ ] String manipulation functions
+- [ ] Module/import system
+
+## Testing
+
+Run the test suite:
+```bash
+./gradlew test
+```
+
+Test compilation scripts:
+```bash
+# Test basic compilation
+./slangc src/main/resources/example.slang test_output --run
+
+# Test all example programs
+make examples
+```
 
 ## License
 

@@ -110,6 +110,7 @@ class CodeGenerator() {
             is Stmt.VarStmt -> visit(stmt)
             is Stmt.AssignStmt -> visit(stmt)
             is Stmt.PrintStmt -> visit(stmt)
+            is Stmt.WhileStmt -> visit(stmt)
             is Stmt.FunctionDef -> {}
             is Stmt.ReturnStmt -> visit(stmt)
             is Stmt.ExprStmt -> visit(stmt)
@@ -269,6 +270,44 @@ class CodeGenerator() {
 
         // Merge block
         LLVMPositionBuilderAtEnd(builder, mergeBlock)
+    }
+
+    private fun visit(stmt: Stmt.WhileStmt) {
+        val currentBlock = LLVMGetInsertBlock(builder)
+        val parentFunction = LLVMGetBasicBlockParent(currentBlock)
+
+        // Create basic blocks for while loop
+        val condBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_cond")
+        val bodyBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_body")
+        val afterBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_after")
+
+        // Branch to condition block
+        LLVMBuildBr(builder, condBlock)
+
+        // Condition block
+        LLVMPositionBuilderAtEnd(builder, condBlock)
+        val condValue = visit(stmt.condition)
+
+        // Convert condition to i1 if needed
+        val condBool = if (LLVMGetTypeKind(LLVMTypeOf(condValue)) == LLVMIntegerTypeKind &&
+                           LLVMGetIntTypeWidth(LLVMTypeOf(condValue)) == 1) {
+            condValue
+        } else {
+            LLVMBuildICmp(builder, LLVMIntNE, condValue,
+                         LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0), "whilecond")
+        }
+
+        LLVMBuildCondBr(builder, condBool, bodyBlock, afterBlock)
+
+        // Body block
+        LLVMPositionBuilderAtEnd(builder, bodyBlock)
+        stmt.body.forEach { visit(it) }
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildBr(builder, condBlock)  // Loop back to condition
+        }
+
+        // After block
+        LLVMPositionBuilderAtEnd(builder, afterBlock)
     }
 
     private fun visit(stmt: Stmt.ReturnStmt) {
@@ -447,6 +486,10 @@ class CodeGenerator() {
             is Expr.StringLiteral -> Type.STRING
             is Expr.Variable -> codegenSymbolTable[expr.name]?.type
                 ?: throw Exception("Undefined variable during type inference: ${expr.name}")
+            is Expr.UnaryOp -> when (expr.operator) {
+                "!" -> Type.BOOL
+                else -> throw Exception("Unknown unary operator: ${expr.operator}")
+            }
             is Expr.Call -> {
                 if (expr.name == "len") {
                     Type.INT
@@ -458,7 +501,7 @@ class CodeGenerator() {
             is Expr.ListLiteral -> Type.LIST
             is Expr.Index -> Type.INT
             is Expr.BinaryOp -> when (expr.operator) {
-                ">", "<", ">=", "<=", "==", "!=" -> Type.BOOL
+                ">", "<", ">=", "<=", "==", "!=", "&&", "||" -> Type.BOOL
                 "+", "-", "*", "/" -> {
                     val leftType = inferExprType(expr.left)
                     val rightType = inferExprType(expr.right)
@@ -481,11 +524,30 @@ class CodeGenerator() {
                     ?: throw Exception("Undefined variable during code generation: ${expr.name}")
                 LLVMBuildLoad2(builder, llvmTypeFor(symbol.type), symbol.ptr, expr.name)
             }
+            is Expr.UnaryOp -> {
+                val operand = visit(expr.operand)
+                when (expr.operator) {
+                    "!" -> {
+                        // Type check: must be Bool
+                        val operandType = inferExprType(expr.operand)
+                        if (operandType != Type.BOOL) {
+                            throw Exception("NOT operator requires Bool operand.")
+                        }
+                        LLVMBuildNot(builder, operand, "nottmp")
+                    }
+                    else -> throw Exception("Unknown unary operator: ${expr.operator}")
+                }
+            }
             is Expr.Call -> buildCall(expr, allowVoid = false)
             is Expr.ListLiteral -> buildListLiteral(expr)
             is Expr.Index -> buildIndexExpr(expr)
 
             is Expr.BinaryOp -> {
+                // Special handling for short-circuit operators
+                if (expr.operator == "&&" || expr.operator == "||") {
+                    return buildShortCircuitLogical(expr)
+                }
+
                 var left = visit(expr.left)
                 var right = visit(expr.right)
                 val leftType = inferExprType(expr.left)
@@ -526,6 +588,62 @@ class CodeGenerator() {
                 }
             }
         }
+    }
+
+    private fun buildShortCircuitLogical(expr: Expr.BinaryOp): LLVMValueRef {
+        val currentBlock = LLVMGetInsertBlock(builder)
+        val parentFunction = LLVMGetBasicBlockParent(currentBlock)
+
+        // Type check
+        if (inferExprType(expr.left) != Type.BOOL || inferExprType(expr.right) != Type.BOOL) {
+            throw Exception("Logical operators require Bool operands.")
+        }
+
+        val rightBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "logical_right")
+        val mergeBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "logical_merge")
+
+        val leftValue = visit(expr.left)
+        val leftEndBlock = LLVMGetInsertBlock(builder)
+
+        if (expr.operator == "&&") {
+            // If left is false, skip right and return false
+            LLVMBuildCondBr(builder, leftValue, rightBlock, mergeBlock)
+        } else {  // ||
+            // If left is true, skip right and return true
+            LLVMBuildCondBr(builder, leftValue, mergeBlock, rightBlock)
+        }
+
+        // Right block
+        LLVMPositionBuilderAtEnd(builder, rightBlock)
+        val rightValue = visit(expr.right)
+        val rightEndBlock = LLVMGetInsertBlock(builder)
+        LLVMBuildBr(builder, mergeBlock)
+
+        // Merge block with phi node
+        LLVMPositionBuilderAtEnd(builder, mergeBlock)
+        val phi = LLVMBuildPhi(builder, LLVMInt1TypeInContext(context), "logical_result")
+
+        val incomingValues = PointerPointer<LLVMValueRef>(2)
+        val incomingBlocks = PointerPointer<LLVMBasicBlockRef>(2)
+
+        if (expr.operator == "&&") {
+            // From left block: false
+            incomingValues.put(0, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
+            incomingBlocks.put(0, leftEndBlock)
+            // From right block: actual right value
+            incomingValues.put(1, rightValue)
+            incomingBlocks.put(1, rightEndBlock)
+        } else {  // ||
+            // From left block: true
+            incomingValues.put(0, LLVMConstInt(LLVMInt1TypeInContext(context), 1, 0))
+            incomingBlocks.put(0, leftEndBlock)
+            // From right block: actual right value
+            incomingValues.put(1, rightValue)
+            incomingBlocks.put(1, rightEndBlock)
+        }
+
+        LLVMAddIncoming(phi, incomingValues, incomingBlocks, 2)
+        return phi
     }
 
     private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {

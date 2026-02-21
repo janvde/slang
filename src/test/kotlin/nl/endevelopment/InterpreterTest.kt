@@ -553,4 +553,378 @@ class InterpreterTest {
         val output = captureInterpreterOutput(source)
         assertEquals("5", output)
     }
+
+    // ============= Phase 3: Logical Operators Tests =============
+
+    @Test
+    fun testNotOperatorTrue() {
+        val source = """
+            let flag: Bool = true;
+            let result: Bool = !flag;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testNotOperatorFalse() {
+        val source = """
+            let flag: Bool = false;
+            let result: Bool = !flag;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testDoubleNotOperator() {
+        val source = """
+            let flag: Bool = true;
+            let result: Bool = !!flag;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testNotInIfCondition() {
+        val source = """
+            let flag: Bool = false;
+            if (!flag) {
+                print(1);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testAndOperatorBothTrue() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = true;
+            let result: Bool = a && b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testAndOperatorBothFalse() {
+        val source = """
+            let a: Bool = false;
+            let b: Bool = false;
+            let result: Bool = a && b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testAndOperatorMixed() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = false;
+            let result: Bool = a && b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testAndShortCircuit() {
+        val source = """
+            let a: Bool = false;
+            let b: Bool = true;
+            let result: Bool = a && b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testOrOperatorBothTrue() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = true;
+            let result: Bool = a || b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testOrOperatorBothFalse() {
+        val source = """
+            let a: Bool = false;
+            let b: Bool = false;
+            let result: Bool = a || b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("false", output)
+    }
+
+    @Test
+    fun testOrOperatorMixed() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = false;
+            let result: Bool = a || b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testOrShortCircuit() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = false;
+            let result: Bool = a || b;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testComplexLogicalExpression() {
+        val source = """
+            let a: Bool = true;
+            let b: Bool = false;
+            let c: Bool = true;
+            let result: Bool = (a && b) || c;
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("true", output)
+    }
+
+    @Test
+    fun testLogicalWithComparison() {
+        val source = """
+            let x: Int = 10;
+            let y: Int = 5;
+            if (x > 5 && y < 10) {
+                print(1);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testLogicalOrWithComparison() {
+        val source = """
+            let x: Int = 10;
+            let y: Int = 5;
+            if (x < 5 || y > 0) {
+                print(1);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testNotWithComparison() {
+        val source = """
+            let x: Int = 10;
+            if (!(x < 5)) {
+                print(1);
+            } else {
+                print(0);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    // ============= Phase 4: While Loops Tests =============
+
+    @Test
+    fun testSimpleWhileLoop() {
+        val source = """
+            var i: Int = 0;
+            while (i < 3) {
+                print(i);
+                i = i + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1\n2", output)
+    }
+
+    @Test
+    fun testWhileLoopCounter() {
+        val source = """
+            var count: Int = 1;
+            while (count <= 5) {
+                print(count);
+                count = count + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1\n2\n3\n4\n5", output)
+    }
+
+    @Test
+    fun testWhileLoopNeverExecutes() {
+        val source = """
+            var i: Int = 0;
+            while (i > 10) {
+                print(100);
+            }
+            print(1);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testWhileLoopWithBreakCondition() {
+        val source = """
+            var i: Int = 0;
+            while (i < 10) {
+                if (i == 3) {
+                    print(99);
+                } else {
+                    print(i);
+                }
+                i = i + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1\n2\n99\n4\n5\n6\n7\n8\n9", output)
+    }
+
+    @Test
+    fun testNestedWhileLoops() {
+        val source = """
+            var i: Int = 1;
+            while (i <= 2) {
+                var j: Int = 1;
+                while (j <= 2) {
+                    print(i * 10 + j);
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("11\n12\n21\n22", output)
+    }
+
+    @Test
+    fun testWhileLoopWithLogicalCondition() {
+        val source = """
+            var i: Int = 0;
+            while (i < 5 && i != 2) {
+                print(i);
+                i = i + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1", output)
+    }
+
+    @Test
+    fun testWhileLoopSum() {
+        val source = """
+            var i: Int = 1;
+            var sum: Int = 0;
+            while (i <= 5) {
+                sum = sum + i;
+                i = i + 1;
+            }
+            print(sum);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("15", output)
+    }
+
+    @Test
+    fun testWhileLoopFactorial() {
+        val source = """
+            var n: Int = 5;
+            var result: Int = 1;
+            while (n > 1) {
+                result = result * n;
+                n = n - 1;
+            }
+            print(result);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("120", output)
+    }
+
+    @Test
+    fun testWhileLoopDivision() {
+        val source = """
+            var x: Int = 100;
+            var count: Int = 0;
+            while (x > 1) {
+                x = x / 2;
+                count = count + 1;
+            }
+            print(count);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("6", output)
+    }
+
+    @Test
+    fun testWhileLoopStringMutation() {
+        val source = """
+            var i: Int = 0;
+            while (i < 3) {
+                i = i + 1;
+            }
+            print(i);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("3", output)
+    }
 }

@@ -12,6 +12,7 @@ sealed class Expr : ASTNode() {
     data class BoolLiteral(val value: Boolean) : Expr()
     data class StringLiteral(val value: String) : Expr()
     data class Variable(val name: String) : Expr()
+    data class UnaryOp(val operator: String, val operand: Expr) : Expr()
     data class BinaryOp(val left: Expr, val operator: String, val right: Expr) : Expr()
     data class Call(val name: String, val args: List<Expr>) : Expr()
     data class ListLiteral(val elements: List<Expr>) : Expr()
@@ -26,6 +27,7 @@ sealed class Stmt : ASTNode() {
     data class AssignStmt(val name: String, val expr: Expr) : Stmt()
     data class PrintStmt(val expr: Expr) : Stmt()
     data class IfStmt(val condition: Expr, val thenBranch: List<Stmt>, val elseBranch: List<Stmt>?) : Stmt()
+    data class WhileStmt(val condition: Expr, val body: List<Stmt>) : Stmt()
     data class FunctionDef(
         val name: String,
         val params: List<Param>,

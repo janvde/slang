@@ -18,6 +18,7 @@ statement
     | assignStmt
     | printStmt
     | ifStmt
+    | whileStmt
     | returnStmt
     | callStmt
     ;
@@ -40,6 +41,10 @@ printStmt
 
 ifStmt
     : 'if' '(' expr ')' block ('else' block)?
+    ;
+
+whileStmt
+    : 'while' '(' expr ')' block
     ;
 
 functionDef
@@ -69,11 +74,14 @@ block
 expr
     : TRUE                           # BoolTrueExpr
     | FALSE                          # BoolFalseExpr
+    | '!' expr                       # NotExpr
     | expr '[' expr ']'              # IndexExpr
     | expr op=('*'|'/'|'%') expr     # MulDivExpr
     | expr op=('+'|'-') expr         # AddSubExpr
     | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
     | expr op=('=='|'!=') expr       # EqualityExpr
+    | expr op='&&' expr              # AndExpr
+    | expr op='||' expr              # OrExpr
     | '(' expr ')'                   # ParenExpr
     | IDENT '(' argList? ')'         # CallExpr
     | listLiteral                    # ListExpr

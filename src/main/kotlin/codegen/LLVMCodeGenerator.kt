@@ -100,6 +100,32 @@ class LLVMCodeGenerator {
                 // End if
                 llvmCode.append("$endLabel:\n")
             }
+            is Stmt.WhileStmt -> {
+                val condLabel = "while_cond_${currentRegister}"
+                val bodyLabel = "while_body_${currentRegister}"
+                val endLabel = "while_end_${currentRegister}"
+                currentRegister++
+
+                // Branch to condition block
+                llvmCode.append("    br label %$condLabel\n")
+
+                // Condition block
+                llvmCode.append("$condLabel:\n")
+                val conditionReg = generateExpr(stmt.condition)
+                llvmCode.append("    br i1 $conditionReg, label %$bodyLabel, label %$endLabel\n")
+
+                // Body block
+                llvmCode.append("$bodyLabel:\n")
+                symbolTable.enterScope()
+                for (s in stmt.body) {
+                    generateStmt(s)
+                }
+                symbolTable.exitScope()
+                llvmCode.append("    br label %$condLabel\n")
+
+                // End while
+                llvmCode.append("$endLabel:\n")
+            }
             is Stmt.FunctionDef -> {
                 // Not supported in this legacy code generator
             }
@@ -125,6 +151,9 @@ class LLVMCodeGenerator {
             }
             is Expr.StringLiteral -> {
                 expr.value
+            }
+            is Expr.UnaryOp -> {
+                throw Exception("Unary operators are not supported in this legacy code generator.")
             }
             is Expr.Variable -> {
                 val varName = variableMap[expr.name]

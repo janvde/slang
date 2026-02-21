@@ -106,6 +106,12 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Stmt.ExprStmt(Expr.Call(name, args))
     }
 
+    override fun visitWhileStmt(ctx: SlangParser.WhileStmtContext): ASTNode {
+        val condition = visit(ctx.expr()) as Expr
+        val body = ctx.block().statement().map { visit(it) as Stmt }
+        return Stmt.WhileStmt(condition, body)
+    }
+
     override fun visitMulDivExpr(ctx: SlangParser.MulDivExprContext): ASTNode {
         val left = visit(ctx.expr(0)) as Expr
         val right = visit(ctx.expr(1)) as Expr
@@ -132,6 +138,23 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val right = visit(ctx.expr(1)) as Expr
         val operator = ctx.op.text
         return Expr.BinaryOp(left, operator, right)
+    }
+
+    override fun visitNotExpr(ctx: SlangParser.NotExprContext): ASTNode {
+        val operand = visit(ctx.expr()) as Expr
+        return Expr.UnaryOp("!", operand)
+    }
+
+    override fun visitAndExpr(ctx: SlangParser.AndExprContext): ASTNode {
+        val left = visit(ctx.expr(0)) as Expr
+        val right = visit(ctx.expr(1)) as Expr
+        return Expr.BinaryOp(left, "&&", right)
+    }
+
+    override fun visitOrExpr(ctx: SlangParser.OrExprContext): ASTNode {
+        val left = visit(ctx.expr(0)) as Expr
+        val right = visit(ctx.expr(1)) as Expr
+        return Expr.BinaryOp(left, "||", right)
     }
 
     override fun visitParenExpr(ctx: SlangParser.ParenExprContext): ASTNode {
