@@ -2,6 +2,7 @@ package codegen
 
 import nl.endevelopment.ast.Expr
 import nl.endevelopment.ast.Program
+import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
 import nl.endevelopment.semantic.Type
 import org.bytedeco.javacpp.PointerPointer
@@ -19,9 +20,15 @@ class CodeGenerator() {
 
     // Store function types for later use in calls
     private lateinit var printfFuncType: LLVMTypeRef
+    private val strlenFuncType: LLVMTypeRef = run {
+        val paramTypes = PointerPointer<LLVMTypeRef>(1)
+        paramTypes.put(0, LLVMPointerType(LLVMInt8TypeInContext(context), 0))
+        LLVMFunctionType(LLVMInt64TypeInContext(context), paramTypes, 1, 0)
+    }
     private val functions = mutableMapOf<String, FunctionInfo>()
     private var currentFunctionReturnType: Type? = null
     private val listStructType: LLVMTypeRef = LLVMStructCreateNamed(context, "List")
+    private val loopTargets = mutableListOf<LoopTarget>()
 
     private data class FunctionInfo(
         val name: String,
@@ -37,6 +44,11 @@ class CodeGenerator() {
         val immutable: Boolean = true
     )
 
+    private data class LoopTarget(
+        val continueBlock: LLVMBasicBlockRef,
+        val breakBlock: LLVMBasicBlockRef
+    )
+
 
     init {
         // Initialize LLVM components
@@ -50,6 +62,10 @@ class CodeGenerator() {
         declarePrintf()
 
         declareFormatStrings()
+    }
+
+    private fun fail(location: SourceLocation, message: String): Nothing {
+        throw Exception(location.format(message))
     }
 
     private fun declareListType() {
@@ -111,6 +127,9 @@ class CodeGenerator() {
             is Stmt.AssignStmt -> visit(stmt)
             is Stmt.PrintStmt -> visit(stmt)
             is Stmt.WhileStmt -> visit(stmt)
+            is Stmt.ForStmt -> visit(stmt)
+            is Stmt.BreakStmt -> visit(stmt)
+            is Stmt.ContinueStmt -> visit(stmt)
             is Stmt.FunctionDef -> {}
             is Stmt.ReturnStmt -> visit(stmt)
             is Stmt.ExprStmt -> visit(stmt)
@@ -160,25 +179,6 @@ class CodeGenerator() {
         LLVMBuildStore(builder, exprValue, symbol.ptr)
     }
 
-//    private fun visit(stmt: Stmt.PrintStmt) {
-//        val exprValue = visit(stmt.expr)
-//        val printfFunc = LLVMGetNamedFunction(module, "printf") ?: declarePrintf()
-//        val formatStr = LLVMBuildGlobalStringPtr(builder, "%d\n", "fmt")
-//
-//        // Prepare arguments for printf: (i8*, i32)
-//        val args = PointerPointer<LLVMValueRef>(2)
-//        args.put(0, formatStr)
-//        args.put(1, exprValue)
-//        LLVMBuildCall2(
-//            builder,
-//            LLVMGetElementType(LLVMTypeOf(printfFunc)),
-//            printfFunc,
-//            args,
-//            2,
-//            "callprintf"
-//        )
-//    }
-
 
     /**
      * Generates LLVM IR for a PrintStmt.
@@ -224,23 +224,10 @@ class CodeGenerator() {
 
 
     private fun visit(stmt: Stmt.IfStmt) {
-        val condValue = visit(stmt.condition)
-
-        // Convert condition to i1 (boolean) if it's not already
-        val condBool = if (LLVMGetTypeKind(LLVMTypeOf(condValue)) == LLVMIntegerTypeKind &&
-                           LLVMGetIntTypeWidth(LLVMTypeOf(condValue)) == 1) {
-            // Already i1, use it directly
-            condValue
-        } else {
-            // Need to convert i32 (or other int) to i1 by comparing to 0
-            LLVMBuildICmp(
-                builder,
-                LLVMIntNE,
-                condValue,
-                LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
-                "ifcond"
-            )
+        if (inferExprType(stmt.condition) != Type.BOOL) {
+            fail(stmt.condition.location, "If condition must be Bool.")
         }
+        val condValue = visit(stmt.condition)
 
         // Get the current block and its parent function
         val currentBlock = LLVMGetInsertBlock(builder)
@@ -252,7 +239,7 @@ class CodeGenerator() {
         val mergeBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "merge")
 
         // Build conditional branch
-        LLVMBuildCondBr(builder, condBool, thenBlock, elseBlock)
+        LLVMBuildCondBr(builder, condValue, thenBlock, elseBlock)
 
         // Then block
         LLVMPositionBuilderAtEnd(builder, thenBlock)
@@ -275,6 +262,9 @@ class CodeGenerator() {
     private fun visit(stmt: Stmt.WhileStmt) {
         val currentBlock = LLVMGetInsertBlock(builder)
         val parentFunction = LLVMGetBasicBlockParent(currentBlock)
+        if (inferExprType(stmt.condition) != Type.BOOL) {
+            fail(stmt.condition.location, "While condition must be Bool.")
+        }
 
         // Create basic blocks for while loop
         val condBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_cond")
@@ -288,26 +278,78 @@ class CodeGenerator() {
         LLVMPositionBuilderAtEnd(builder, condBlock)
         val condValue = visit(stmt.condition)
 
-        // Convert condition to i1 if needed
-        val condBool = if (LLVMGetTypeKind(LLVMTypeOf(condValue)) == LLVMIntegerTypeKind &&
-                           LLVMGetIntTypeWidth(LLVMTypeOf(condValue)) == 1) {
-            condValue
-        } else {
-            LLVMBuildICmp(builder, LLVMIntNE, condValue,
-                         LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0), "whilecond")
-        }
-
-        LLVMBuildCondBr(builder, condBool, bodyBlock, afterBlock)
+        LLVMBuildCondBr(builder, condValue, bodyBlock, afterBlock)
 
         // Body block
         LLVMPositionBuilderAtEnd(builder, bodyBlock)
-        stmt.body.forEach { visit(it) }
+        loopTargets.add(LoopTarget(continueBlock = condBlock, breakBlock = afterBlock))
+        try {
+            stmt.body.forEach { visit(it) }
+        } finally {
+            loopTargets.removeAt(loopTargets.size - 1)
+        }
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
             LLVMBuildBr(builder, condBlock)  // Loop back to condition
         }
 
         // After block
         LLVMPositionBuilderAtEnd(builder, afterBlock)
+    }
+
+    private fun visit(stmt: Stmt.ForStmt) {
+        stmt.init?.let { visit(it) }
+
+        val currentBlock = LLVMGetInsertBlock(builder)
+        val parentFunction = LLVMGetBasicBlockParent(currentBlock)
+
+        val condBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "for_cond")
+        val bodyBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "for_body")
+        val updateBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "for_update")
+        val afterBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "for_after")
+
+        LLVMBuildBr(builder, condBlock)
+
+        LLVMPositionBuilderAtEnd(builder, condBlock)
+        if (stmt.condition != null) {
+            if (inferExprType(stmt.condition) != Type.BOOL) {
+                fail(stmt.condition.location, "For-loop condition must be Bool.")
+            }
+            val condValue = visit(stmt.condition)
+            LLVMBuildCondBr(builder, condValue, bodyBlock, afterBlock)
+        } else {
+            LLVMBuildBr(builder, bodyBlock)
+        }
+
+        LLVMPositionBuilderAtEnd(builder, bodyBlock)
+        loopTargets.add(LoopTarget(continueBlock = updateBlock, breakBlock = afterBlock))
+        try {
+            stmt.body.forEach { visit(it) }
+        } finally {
+            loopTargets.removeAt(loopTargets.size - 1)
+        }
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildBr(builder, updateBlock)
+        }
+
+        LLVMPositionBuilderAtEnd(builder, updateBlock)
+        stmt.update?.let { visit(it) }
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            LLVMBuildBr(builder, condBlock)
+        }
+
+        LLVMPositionBuilderAtEnd(builder, afterBlock)
+    }
+
+    private fun visit(stmt: Stmt.BreakStmt) {
+        val target = loopTargets.lastOrNull()
+            ?: fail(stmt.location, "'break' is only allowed inside a loop.")
+        LLVMBuildBr(builder, target.breakBlock)
+    }
+
+    private fun visit(stmt: Stmt.ContinueStmt) {
+        val target = loopTargets.lastOrNull()
+            ?: fail(stmt.location, "'continue' is only allowed inside a loop.")
+        LLVMBuildBr(builder, target.continueBlock)
     }
 
     private fun visit(stmt: Stmt.ReturnStmt) {
@@ -649,10 +691,15 @@ class CodeGenerator() {
     private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {
         if (expr.name == "len") {
             if (expr.args.size != 1) {
-                throw Exception("len expects 1 argument, got ${expr.args.size}.")
+                fail(expr.location, "len expects 1 argument, got ${expr.args.size}.")
             }
+            val argType = inferExprType(expr.args[0])
             val argValue = visit(expr.args[0])
-            return buildListLength(argValue)
+            return when (argType) {
+                Type.LIST -> buildListLength(argValue)
+                Type.STRING -> buildStringLength(argValue)
+                else -> fail(expr.args[0].location, "len expects a List or String argument.")
+            }
         }
         val info = functions[expr.name]
             ?: throw Exception("Undefined function during code generation: ${expr.name}")
@@ -684,6 +731,20 @@ class CodeGenerator() {
         val lenPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 0, "list_len_ptr")
         val lenVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenPtr, "list_len")
         return LLVMBuildTrunc(builder, lenVal, LLVMInt32TypeInContext(context), "list_len_i32")
+    }
+
+    private fun buildStringLength(strPtr: LLVMValueRef): LLVMValueRef {
+        val strlenFn = LLVMGetNamedFunction(module, "strlen") ?: declareStrlen()
+        val args = PointerPointer<LLVMValueRef>(1).apply { put(0, strPtr) }
+        val len64 = LLVMBuildCall2(
+            builder,
+            strlenFuncType,
+            strlenFn,
+            args,
+            1,
+            "strlen_call"
+        ) ?: throw Exception("Failed to build call to strlen.")
+        return LLVMBuildTrunc(builder, len64, LLVMInt32TypeInContext(context), "strlen_i32")
     }
 
     private fun buildIndexExpr(expr: Expr.Index): LLVMValueRef {
@@ -799,27 +860,6 @@ class CodeGenerator() {
         }
     }
 
-//    private fun declarePrintf(): LLVMValueRef {
-//        // Define the printf function signature: i32 (i8*, ...)
-//        val printfReturnType = LLVMInt32TypeInContext(context)
-//        val printfParamType = LLVMPointerType(LLVMInt8TypeInContext(context), 0)
-//
-//        // Create a PointerPointer for the parameter types
-//        val printfParamTypes = PointerPointer<LLVMTypeRef>(1) // Allocate space for 1 parameter
-//        printfParamTypes.put(0, printfParamType)              // Set the first (and only) parameter type to i8*
-//
-//        // Define the function type: i32 (i8*, ...)
-//        val printfType = LLVMFunctionType(
-//            printfReturnType, // Return type: i32
-//            printfParamTypes, // Parameter types: i8*
-//            1,                // Number of parameters
-//            1                 // Is variadic: true (1 for true, 0 for false)
-//        )
-//
-//        // Add the printf function to the module
-//        return LLVMAddFunction(module, "printf", printfType)
-//    }
-
     private fun declarePrintf(): LLVMValueRef {
         // Define the printf function signature: i32 (i8*, ...)
         val printfReturnType = LLVMInt32TypeInContext(context)
@@ -839,6 +879,10 @@ class CodeGenerator() {
 
         // Add the printf function to the module
         return LLVMAddFunction(module, "printf", printfFuncType)
+    }
+
+    private fun declareStrlen(): LLVMValueRef {
+        return LLVMAddFunction(module, "strlen", strlenFuncType)
     }
 
 

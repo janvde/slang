@@ -123,7 +123,7 @@ class CodeGeneratorTest {
     fun testIfStatement() {
         val source = """
             let x: Int = 5;
-            if (x) {
+            if (x > 0) {
                 print(x);
             } else {
                 print(0);
@@ -143,7 +143,7 @@ class CodeGeneratorTest {
     fun testIfWithoutElse() {
         val source = """
             let x: Int = 5;
-            if (x) {
+            if (x > 0) {
                 print(x);
             }
         """.trimIndent()
@@ -237,5 +237,64 @@ class CodeGeneratorTest {
         assertTrue(ir.contains("load i32"))
         assertTrue(ir.contains("%x = alloca i32"))
         assertTrue(ir.contains("%y = alloca i32"))
+    }
+
+    @Test
+    fun testLenOnStringUsesStrlen() {
+        val source = """
+            let message: String = "hello";
+            let n: Int = len(message);
+            print(n);
+        """.trimIndent()
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("declare i64 @strlen"))
+        assertTrue(ir.contains("call i64 @strlen"))
+    }
+
+    @Test
+    fun testForLoopGeneratesBlocks() {
+        val source = """
+            for (var i: Int = 0; i < 3; i = i + 1) {
+                print(i);
+            }
+        """.trimIndent()
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("label %for_cond"))
+        assertTrue(ir.contains("label %for_body"))
+        assertTrue(ir.contains("label %for_update"))
+        assertTrue(ir.contains("label %for_after"))
+    }
+
+    @Test
+    fun testBreakContinueInForLoopGenerateBranches() {
+        val source = """
+            for (var i: Int = 0; i < 5; i = i + 1) {
+                if (i == 2) { continue; }
+                if (i == 4) { break; }
+                print(i);
+            }
+        """.trimIndent()
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("for_update"))
+        assertTrue(ir.contains("for_after"))
+        assertTrue(ir.contains("br label"))
+    }
+
+    @Test
+    fun testNonBoolIfConditionFails() {
+        val source = """
+            let x: Int = 1;
+            if (x) {
+                print(1);
+            }
+        """.trimIndent()
+
+        val error = assertFailsWith<Exception> {
+            generateIR(source)
+        }
+        assertTrue(error.message?.contains("If condition must be Bool") == true)
     }
 }

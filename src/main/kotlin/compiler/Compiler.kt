@@ -6,6 +6,7 @@ import nl.endevelopment.interpreter.Interpreter
 import nl.endevelopment.parser.ASTBuilder
 import nl.endevelopment.parser.SlangLexer
 import nl.endevelopment.parser.SlangParser
+import nl.endevelopment.semantic.TypeChecker
 import nl.endevelopment.utils.Utils
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
@@ -34,17 +35,21 @@ class Compiler {
             val astBuilder = ASTBuilder()
             val ast = astBuilder.visit(tree) as Program
 
-            // 4. Interpreter execution
+            // 4. Type checking
+            val typeChecker = TypeChecker()
+            typeChecker.check(ast)
+
+            // 5. Interpreter execution
             val interpreter = Interpreter()
             Utils.log("Executing with interpreter...")
             interpreter.interpret(ast)
 
-            // 5. Code Generation using LLVM C API
+            // 6. Code Generation using LLVM C API
             codeGenerator.generate(ast)
             codeGenerator.writeIRToFile(outputIRFilePath)
             Utils.log("Code Generation Complete: LLVM IR generated at '$outputIRFilePath'.")
 
-            // 6. (Optional) Compile LLVM IR to Executable
+            // 7. (Optional) Compile LLVM IR to Executable
             try {
                 val executablePath = outputIRFilePath.removeSuffix(".ll")
                 compileLLVMIR(outputIRFilePath, executablePath)
@@ -54,12 +59,11 @@ class Compiler {
                 Utils.log("To compile manually: llc -filetype=obj $outputIRFilePath -o ${outputIRFilePath.removeSuffix(".ll")}.o && clang ${outputIRFilePath.removeSuffix(".ll")}.o -o ${outputIRFilePath.removeSuffix(".ll")}")
             }
 
-            // 7. Dispose of CodeGenerator Resources
+            // 8. Dispose of CodeGenerator Resources
             codeGenerator.dispose()
 
         } catch (e: Exception) {
             Utils.log("Compilation Error: ${e.message}")
-            e.printStackTrace()
             codeGenerator.dispose()
         }
     }

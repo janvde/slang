@@ -81,7 +81,7 @@ class CompilerTest {
     fun testCompileIfStatement() {
         val source = """
             let x: Int = 10;
-            if (x) {
+            if (x > 0) {
                 print(100);
             } else {
                 print(0);
@@ -184,9 +184,9 @@ class CompilerTest {
     fun testNestedIfStatements() {
         val source = """
             let x: Int = 10;
-            if (x) {
+            if (x > 0) {
                 let y: Int = x - 2;
-                if (y) {
+                if (y > 0) {
                     print(1);
                 } else {
                     print(2);
@@ -203,7 +203,7 @@ class CompilerTest {
                 compiler.compile(source, tempOutput.absolutePath)
             }
 
-            assertTrue(output.contains("1")) // x=10 is truthy, y=8 is truthy
+            assertTrue(output.contains("1"))
 
             val ir = tempOutput.readText()
             assertTrue(ir.contains("icmp"))
@@ -335,6 +335,96 @@ class CompilerTest {
             }
 
             assertTrue(output.contains("20")) // (2+3)*4 = 5*4 = 20
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testLenStringCompilation() {
+        val source = """
+            let s: String = "abc";
+            print(len(s));
+        """.trimIndent()
+
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(output.contains("3"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("declare i64 @strlen"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testBoolOnlyConditionErrorHasLocation() {
+        val source = """
+            let x: Int = 1;
+            if (x) {
+                print(1);
+            }
+        """.trimIndent()
+
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(output.contains("Error at line"))
+            assertTrue(output.contains("If condition must be Bool"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testForLoopWithBreakAndContinue() {
+        val source = """
+            for (var i: Int = 0; i < 6; i = i + 1) {
+                if (i == 2) { continue; }
+                if (i == 4) { break; }
+                print(i);
+            }
+        """.trimIndent()
+
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(output.contains("0"))
+            assertTrue(output.contains("1"))
+            assertTrue(output.contains("3"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("for_cond"))
+            assertTrue(ir.contains("for_update"))
+            assertTrue(ir.contains("for_after"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testBreakOutsideLoopTypeErrorHasLocation() {
+        val source = "break;"
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+            assertTrue(output.contains("Error at line"))
+            assertTrue(output.contains("'break' is only allowed inside a loop."))
         } finally {
             tempOutput.delete()
         }

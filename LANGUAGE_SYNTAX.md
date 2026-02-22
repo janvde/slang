@@ -14,6 +14,7 @@ Complete syntax guide for the Slang programming language.
 - [Logical Operators](#logical-operators)
 - [Functions](#functions)
 - [Lists](#lists)
+- [Built-in Functions](#built-in-functions)
 
 ---
 
@@ -202,6 +203,12 @@ if (x > 0) {
 
 The condition must evaluate to a `Bool` value.
 
+```slang
+let x: Int = 1;
+if (x > 0) { print(1); }   // Valid
+if (x) { print(1); }       // ERROR: condition must be Bool
+```
+
 ### While Loops
 
 **Simple While Loop:**
@@ -243,6 +250,39 @@ while (row <= 3) {
 - Factorial computation
 - Nested iteration
 - Conditional termination
+
+### For Loops
+
+Slang supports C-style `for` loops:
+
+```slang
+for (var i: Int = 0; i < 5; i = i + 1) {
+    print(i);
+}
+// Prints: 0, 1, 2, 3, 4
+```
+
+You may omit parts of the loop header:
+
+```slang
+var i: Int = 0;
+for (; i < 3; i = i + 1) {
+    print(i);
+}
+```
+
+### Break and Continue
+
+`break` exits the nearest loop, and `continue` skips to the next iteration:
+
+```slang
+for (var i: Int = 0; i < 6; i = i + 1) {
+    if (i == 2) { continue; }
+    if (i == 4) { break; }
+    print(i);
+}
+// Prints: 0, 1, 3
+```
 
 ---
 
@@ -418,12 +458,22 @@ print(xs[2]);    // 30
 
 **Note:** Indices are zero-based.
 
-### Built-in Functions
+## Built-in Functions
 
-**Length:**
+### `len(value)`
+
+Returns the length of a `List` or `String`.
+
+**List length:**
 ```slang
 let xs: List = [1, 2, 3, 4, 5];
 print(len(xs));  // 5
+```
+
+**String length:**
+```slang
+let name: String = "Alice";
+print(len(name));  // 5
 ```
 
 ### List Examples
@@ -551,6 +601,7 @@ print(sum);  // 30
 - No other implicit conversions
 - All types are strictly checked
 - Logical operators require `Bool` operands only
+- Conditions in `if`, `while`, and `for` require `Bool`
 
 ---
 
@@ -642,11 +693,12 @@ print(temp);  // ERROR: temp not in scope
 
 ```slang
 // Single-line comments start with //
+let x: Int = 42;  // Inline comments are supported
 
-let x: Int = 42;  // Comments can be at end of line
+/* Multi-line comments
+   are also supported */
+let y: Int = 10;
 ```
-
-**Note:** Multi-line comments are not currently supported.
 
 ---
 
@@ -725,13 +777,10 @@ while (i < len(list) && !found) {
 ## Limitations & Notes
 
 ### Current Limitations
-- No `for` loops (use `while` instead)
-- No `break` or `continue` statements
 - No arrays (only integer Lists)
 - String concatenation: interpreter only (LLVM codegen pending)
 - No string manipulation functions yet
 - No type inference (explicit types required)
-- Single-line comments only
 
 ### Interpreter vs LLVM Differences
 - **Interpreter:** Full string concatenation support
@@ -752,7 +801,6 @@ while (i < len(list) && !found) {
 
 ---
 
-**Last Updated:** February 21, 2026
+**Last Updated:** February 22, 2026
 **Version:** 1.0
 **Slang Language Specification**
-

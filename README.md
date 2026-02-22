@@ -12,10 +12,14 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 - **Type promotion**: Automatic Int→Float conversion in mixed operations
 - **String operations**: Concatenation with `+` operator (interpreter only)
 - **Logical operators**: `!` (NOT), `&&` (AND), `||` (OR) with short-circuit evaluation
-- **Control flow** with if/else statements and while loops
+- **Control flow** with if/else statements, while loops, and C-style for loops
+- **Loop control**: `break` and `continue`
 - **Comparison operators** (>, <, >=, <=, ==, !=)
 - **Functions** with parameters, return values, and `return` statements
 - **List literals** with indexing (`xs[0]`) and length via `len(xs)`
+- **Built-in length**: `len(List)` and `len(String)`
+- **Strict Bool conditions**: `if` / `while` / `for` conditions must be `Bool`
+- **Source diagnostics**: Errors include line/column locations
 - **LLVM IR generation** for efficient compilation
 - **Native code compilation** to standalone executables
 - **Direct interpretation** for quick execution
@@ -41,7 +45,7 @@ slang/
 │   │   ├── parser/
 │   │   │   └── ASTBuilder.kt      # Parse tree to AST conversion
 │   │   ├── semantic/
-│   │   │   └── SymbolTable.kt     # Type checking and symbol management
+│   │   │   └── TypeChecker.kt     # Static type checking and semantic validation
 │   │   └── utils/
 │   │       └── Utils.kt           # Utility functions
 │   └── resources/
@@ -244,6 +248,12 @@ while (i < 10) {
     print(i);
     i = i + 1;
 }
+
+for (var j: Int = 0; j < 10; j = j + 1) {
+    if (j == 4) { continue; }
+    if (j == 8) { break; }
+    print(j);
+}
 ```
 
 **Logical Operators:**
@@ -261,6 +271,16 @@ fn add(a: Int, b: Int): Int {
 ```
 
 **Data Types:** Int, Float, Bool, String, List, Void
+
+### Condition Semantics
+
+Conditions in `if`, `while`, and `for` must evaluate to `Bool`.
+
+```slang
+let x: Int = 1;
+if (x > 0) { print(1); }   // valid
+if (x) { print(1); }       // type error
+```
 
 See [LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md) for:
 - Complete syntax reference
@@ -284,7 +304,7 @@ See [LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md) for:
 
 - **Interpreter.kt**: Executes the AST directly for quick testing
 - **CodeGenerator.kt**: Generates LLVM IR from the AST using JavaCPP bindings
-- **SymbolTable.kt**: Manages variable scopes and type information
+- **TypeChecker.kt**: Enforces static type rules before execution/codegen
 - **ASTBuilder.kt**: Converts ANTLR parse trees to custom AST nodes
 
 ## Troubleshooting
@@ -380,71 +400,13 @@ sudo cp slangc slangc.py /usr/local/bin/
 .slang source → Slang Compiler → LLVM IR → llc → Object File → clang → Native Binary
 ```
 
-For complete documentation, see:
-- [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md) - Complete usage guide
-- [`COMPILER_SCRIPTS_SUMMARY.md`](COMPILER_SCRIPTS_SUMMARY.md) - Executive summary
-
-## Documentation
-
-### Language Reference
-- **[LANGUAGE_SYNTAX.md](LANGUAGE_SYNTAX.md)** - Complete language syntax reference
-
-### Language Features
-- [`PHASE_3_4_COMPLETE.md`](PHASE_3_4_COMPLETE.md) - Logical operators and while loops
-- [`progress-report-phases-0-2.md`](progress-report-phases-0-2.md) - Initial features implementation
-- [`FEATURES_DEMO_README.md`](FEATURES_DEMO_README.md) - Feature demonstration guide
-
-### Development
-- [`CLAUDE.md`](CLAUDE.md) - Architecture guide for AI assistants
-- [`COMPILER_SCRIPTS_README.md`](COMPILER_SCRIPTS_README.md) - Compilation scripts documentation
-- [`resources.md`](resources.md) - Available resources and examples
-
-### Example Programs
-All example programs are in `src/main/resources/`:
-- `example.slang` - Basic arithmetic
-- `comparison_demo.slang` - Comparison operators and functions
-- `features_demo.slang` - All basic features (Phases 0-2)
-- `logical_operators_demo.slang` - Logical operators (!, &&, ||)
-- `loops_demo.slang` - While loop examples
-
-## Implemented Features
-
-### Phases 0-2: Core Features ✅
-- ✅ Modulo operator (%)
-- ✅ Boolean literals (true, false)
-- ✅ Float literals with scientific notation
-- ✅ String literals with escape sequences
-- ✅ Variable mutability (let vs var)
-- ✅ Variable reassignment
-
-### Phase 3: Logical Operators ✅
-- ✅ NOT operator (!)
-- ✅ AND operator (&&) with short-circuit evaluation
-- ✅ OR operator (||) with short-circuit evaluation
-- ✅ Strict Bool type checking
-
-### Phase 4: While Loops ✅
-- ✅ While loop construct
-- ✅ Nested loops
-- ✅ Proper variable scoping
-- ✅ Integration with all operators
-
-### Compiler Infrastructure ✅
-- ✅ Bash compilation script
-- ✅ Python compilation script
-- ✅ Makefile integration
-- ✅ Native binary generation
-- ✅ LLVM IR generation
-
 ## Future Enhancements
 
-- [ ] For loops
-- [ ] Break/continue statements
 - [ ] Arrays and complex data types
-- [ ] Better error messages with line numbers
 - [ ] Optimization passes
 - [ ] More built-in functions
 - [ ] String manipulation functions
+- [ ] Full string concatenation in LLVM codegen
 - [ ] Module/import system
 
 ## Testing
@@ -472,4 +434,3 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 - [LLVM Documentation](https://llvm.org/docs/)
 - [ANTLR Documentation](https://www.antlr.org/)
 - [JavaCPP Bindings for LLVM](https://github.com/bytedeco/javacpp-presets)
-

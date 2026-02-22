@@ -1,32 +1,27 @@
-// Interpreter.kt
 package nl.endevelopment.interpreter
 
 import nl.endevelopment.ast.Expr
 import nl.endevelopment.ast.Program
+import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
+import nl.endevelopment.semantic.Type
 
-class Interpreter() {
+class Interpreter {
 
     private val variableEnv = VariableEnvironment()
     private val functions = mutableMapOf<String, Stmt.FunctionDef>()
     private var functionDepth = 0
+    private var loopDepth = 0
 
     private class ReturnSignal(val value: Value) : RuntimeException(null, null, false, false)
+    private class BreakSignal : RuntimeException(null, null, false, false)
+    private class ContinueSignal : RuntimeException(null, null, false, false)
 
-    /**
-     * Starts interpreting the given program.
-     */
     fun interpret(program: Program) {
-        // Initialize global scope for variable values
         variableEnv.enterScope()
         try {
-            // Register function definitions first
-            program.statements.filterIsInstance<Stmt.FunctionDef>()
-                .forEach { registerFunction(it) }
-
-            // Execute top-level statements (excluding function definitions)
-            program.statements.filterNot { it is Stmt.FunctionDef }
-                .forEach { execute(it) }
+            program.statements.filterIsInstance<Stmt.FunctionDef>().forEach { registerFunction(it) }
+            program.statements.filterNot { it is Stmt.FunctionDef }.forEach { execute(it) }
         } catch (e: RuntimeException) {
             println("Runtime Error: ${e.message}")
         } finally {
@@ -34,18 +29,12 @@ class Interpreter() {
         }
     }
 
-    /**
-     * Executes a block of statements within the current scope.
-     */
     private fun executeBlock(statements: List<Stmt>) {
         for (stmt in statements) {
             execute(stmt)
         }
     }
 
-    /**
-     * Executes a single statement.
-     */
     private fun execute(stmt: Stmt) {
         when (stmt) {
             is Stmt.LetStmt -> handleLetStmt(stmt)
@@ -54,24 +43,22 @@ class Interpreter() {
             is Stmt.PrintStmt -> handlePrintStmt(stmt)
             is Stmt.IfStmt -> handleIfStmt(stmt)
             is Stmt.WhileStmt -> handleWhileStmt(stmt)
+            is Stmt.ForStmt -> handleForStmt(stmt)
+            is Stmt.BreakStmt -> handleBreakStmt(stmt)
+            is Stmt.ContinueStmt -> handleContinueStmt(stmt)
             is Stmt.FunctionDef -> registerFunction(stmt)
             is Stmt.ReturnStmt -> handleReturnStmt(stmt)
             is Stmt.ExprStmt -> handleExprStmt(stmt)
         }
     }
 
-    // ...existing code...
-
-    /**
-     * Handles while loop execution.
-     */
     private fun handleWhileStmt(stmt: Stmt.WhileStmt) {
         variableEnv.enterScope()
         try {
+            loopDepth++
             while (true) {
                 val conditionValue = evaluate(stmt.condition, allowVoid = false)
-                val conditionResult = evaluateCondition(conditionValue)
-
+                val conditionResult = evaluateCondition(conditionValue, stmt.condition.location)
                 if (!conditionResult) {
                     break
                 }
@@ -80,55 +67,91 @@ class Interpreter() {
                     for (s in stmt.body) {
                         execute(s)
                     }
+                } catch (_: ContinueSignal) {
+                    continue
+                } catch (e: BreakSignal) {
+                    break
                 } catch (e: ReturnSignal) {
-                    throw e  // Re-throw return signal to propagate it
+                    throw e
                 }
             }
         } finally {
+            loopDepth--
             variableEnv.exitScope()
         }
     }
 
-    /**
-     * Handles variable declaration and assignment for let statements.
-     */
+    private fun handleForStmt(stmt: Stmt.ForStmt) {
+        variableEnv.enterScope()
+        try {
+            loopDepth++
+            stmt.init?.let { execute(it) }
+            while (true) {
+                val shouldContinue = stmt.condition?.let {
+                    evaluateCondition(evaluate(it, allowVoid = false), it.location)
+                } ?: true
+
+                if (!shouldContinue) {
+                    break
+                }
+
+                try {
+                    executeBlock(stmt.body)
+                } catch (_: ContinueSignal) {
+                    stmt.update?.let { execute(it) }
+                    continue
+                } catch (_: BreakSignal) {
+                    break
+                } catch (e: ReturnSignal) {
+                    throw e
+                }
+
+                stmt.update?.let { execute(it) }
+            }
+        } finally {
+            loopDepth--
+            variableEnv.exitScope()
+        }
+    }
+
+    private fun handleBreakStmt(stmt: Stmt.BreakStmt) {
+        if (loopDepth <= 0) {
+            throw RuntimeException(stmt.location.format("'break' is only allowed inside a loop."))
+        }
+        throw BreakSignal()
+    }
+
+    private fun handleContinueStmt(stmt: Stmt.ContinueStmt) {
+        if (loopDepth <= 0) {
+            throw RuntimeException(stmt.location.format("'continue' is only allowed inside a loop."))
+        }
+        throw ContinueSignal()
+    }
+
     private fun handleLetStmt(stmt: Stmt.LetStmt) {
         val value = evaluate(stmt.expr, allowVoid = false)
         variableEnv.define(stmt.name, value, immutable = true)
     }
 
-    /**
-     * Handles variable declaration and assignment for var statements.
-     */
     private fun handleVarStmt(stmt: Stmt.VarStmt) {
         val value = evaluate(stmt.expr, allowVoid = false)
         variableEnv.define(stmt.name, value, immutable = false)
     }
 
-    /**
-     * Handles variable reassignment.
-     */
     private fun handleAssignStmt(stmt: Stmt.AssignStmt) {
         val value = evaluate(stmt.expr, allowVoid = false)
-        variableEnv.set(stmt.name, value)
+        variableEnv.set(stmt.name, value, stmt.location)
     }
 
-    /**
-     * Handles print statements.
-     */
     private fun handlePrintStmt(stmt: Stmt.PrintStmt) {
         val value = evaluate(stmt.expr, allowVoid = false)
         println(valueToString(value))
     }
 
-    /**
-     * Handles if statements with optional else branches.
-     */
     private fun handleIfStmt(stmt: Stmt.IfStmt) {
         val conditionValue = evaluate(stmt.condition, allowVoid = false)
-        val conditionResult = evaluateCondition(conditionValue)
+        val conditionResult = evaluateCondition(conditionValue, stmt.condition.location)
 
-        // Enter a new scope for the branch
         variableEnv.enterScope()
         try {
             if (conditionResult) {
@@ -137,21 +160,17 @@ class Interpreter() {
                 executeBlock(stmt.elseBranch)
             }
         } finally {
-            // Exit the branch scope
             variableEnv.exitScope()
         }
     }
 
-    /**
-     * Evaluates an expression and returns its value.
-     */
     private fun evaluate(expr: Expr, allowVoid: Boolean = false): Value {
         return when (expr) {
             is Expr.Number -> Value.IntValue(expr.value)
             is Expr.FloatLiteral -> Value.FloatValue(expr.value)
             is Expr.BoolLiteral -> Value.BoolValue(expr.value)
             is Expr.StringLiteral -> Value.StringValue(expr.value)
-            is Expr.Variable -> variableEnv.get(expr.name)
+            is Expr.Variable -> variableEnv.get(expr.name, expr.location)
             is Expr.UnaryOp -> evaluateUnaryOp(expr)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
             is Expr.Call -> callFunction(expr, allowVoid)
@@ -162,10 +181,10 @@ class Interpreter() {
 
     private fun registerFunction(stmt: Stmt.FunctionDef) {
         if (stmt.name == "len") {
-            throw RuntimeException("Cannot redefine built-in function 'len'.")
+            throw RuntimeException(stmt.location.format("Cannot redefine built-in function 'len'."))
         }
         if (functions.containsKey(stmt.name)) {
-            throw RuntimeException("Function '${stmt.name}' is already defined.")
+            throw RuntimeException(stmt.location.format("Function '${stmt.name}' is already defined."))
         }
         functions[stmt.name] = stmt
     }
@@ -174,14 +193,15 @@ class Interpreter() {
         if (expr.name == "len") {
             return evalLen(expr)
         }
+
         val function = functions[expr.name]
-            ?: throw RuntimeException("Undefined function '${expr.name}'.")
+            ?: throw RuntimeException(expr.location.format("Undefined function '${expr.name}'."))
 
         if (expr.args.size != function.params.size) {
-            throw RuntimeException("Function '${expr.name}' expects ${function.params.size} arguments, got ${expr.args.size}.")
+            throw RuntimeException(expr.location.format("Function '${expr.name}' expects ${function.params.size} arguments, got ${expr.args.size}."))
         }
-        if (!allowVoid && function.returnType == nl.endevelopment.semantic.Type.VOID) {
-            throw RuntimeException("Cannot use void function '${expr.name}' in an expression.")
+        if (!allowVoid && function.returnType == Type.VOID) {
+            throw RuntimeException(expr.location.format("Cannot use void function '${expr.name}' in an expression."))
         }
 
         val argValues = expr.args.map { evaluate(it, allowVoid = false) }
@@ -195,7 +215,7 @@ class Interpreter() {
             try {
                 executeBlock(function.body)
             } catch (signal: ReturnSignal) {
-                validateReturnType(function.returnType, signal.value)
+                validateReturnType(function.returnType, signal.value, expr.location)
                 return signal.value
             }
         } finally {
@@ -203,16 +223,15 @@ class Interpreter() {
             functionDepth--
         }
 
-        val defaultValue = Value.VoidValue
-        if (function.returnType != nl.endevelopment.semantic.Type.VOID) {
-            throw RuntimeException("Function '${function.name}' must return a value.")
+        if (function.returnType != Type.VOID) {
+            throw RuntimeException(expr.location.format("Function '${function.name}' must return a value."))
         }
-        return defaultValue
+        return Value.VoidValue
     }
 
     private fun handleReturnStmt(stmt: Stmt.ReturnStmt) {
         if (functionDepth <= 0) {
-            throw RuntimeException("Return statement is only allowed inside a function.")
+            throw RuntimeException(stmt.location.format("Return statement is only allowed inside a function."))
         }
         val value = stmt.expr?.let { evaluate(it, allowVoid = false) } ?: Value.VoidValue
         throw ReturnSignal(value)
@@ -224,12 +243,13 @@ class Interpreter() {
 
     private fun evalLen(expr: Expr.Call): Value {
         if (expr.args.size != 1) {
-            throw RuntimeException("len expects 1 argument, got ${expr.args.size}.")
+            throw RuntimeException(expr.location.format("len expects 1 argument, got ${expr.args.size}."))
         }
         val value = evaluate(expr.args[0], allowVoid = false)
         return when (value) {
             is Value.ListValue -> Value.IntValue(value.elements.size)
-            else -> throw RuntimeException("len expects a List argument.")
+            is Value.StringValue -> Value.IntValue(value.value.length)
+            else -> throw RuntimeException(expr.args[0].location.format("len expects a List or String argument."))
         }
     }
 
@@ -237,76 +257,56 @@ class Interpreter() {
         val target = evaluate(expr.target, allowVoid = false)
         val indexValue = evaluate(expr.index, allowVoid = false)
         if (indexValue !is Value.IntValue) {
-            throw RuntimeException("List index must be an Int.")
+            throw RuntimeException(expr.index.location.format("List index must be an Int."))
         }
         return when (target) {
             is Value.ListValue -> {
                 val idx = indexValue.value
                 if (idx < 0 || idx >= target.elements.size) {
-                    throw RuntimeException("List index out of bounds: $idx.")
+                    throw RuntimeException(expr.index.location.format("List index out of bounds: $idx."))
                 }
                 target.elements[idx]
             }
-            else -> throw RuntimeException("Indexing is only supported on Lists.")
+            else -> throw RuntimeException(expr.target.location.format("Indexing is only supported on Lists."))
         }
     }
 
-    /**
-     * Evaluates a unary operation.
-     */
     private fun evaluateUnaryOp(expr: Expr.UnaryOp): Value {
         val operandValue = evaluate(expr.operand, allowVoid = false)
         return when (expr.operator) {
             "!" -> {
                 if (operandValue !is Value.BoolValue) {
-                    throw RuntimeException("NOT operator requires Bool operand, got ${operandValue::class.simpleName}.")
+                    throw RuntimeException(expr.location.format("NOT operator requires Bool operand."))
                 }
                 Value.BoolValue(!operandValue.value)
             }
-            else -> throw RuntimeException("Unknown unary operator '${expr.operator}'.")
+            else -> throw RuntimeException(expr.location.format("Unknown unary operator '${expr.operator}'."))
         }
     }
 
-    private fun validateReturnType(expected: nl.endevelopment.semantic.Type, value: Value) {
+    private fun validateReturnType(expected: Type, value: Value, location: SourceLocation) {
         when (expected) {
-            nl.endevelopment.semantic.Type.INT -> if (value !is Value.IntValue) {
-                throw RuntimeException("Function return type mismatch. Expected Int.")
-            }
-            nl.endevelopment.semantic.Type.FLOAT -> if (value !is Value.FloatValue) {
-                throw RuntimeException("Function return type mismatch. Expected Float.")
-            }
-            nl.endevelopment.semantic.Type.BOOL -> if (value !is Value.BoolValue) {
-                throw RuntimeException("Function return type mismatch. Expected Bool.")
-            }
-            nl.endevelopment.semantic.Type.STRING -> if (value !is Value.StringValue) {
-                throw RuntimeException("Function return type mismatch. Expected String.")
-            }
-            nl.endevelopment.semantic.Type.LIST -> if (value !is Value.ListValue) {
-                throw RuntimeException("Function return type mismatch. Expected List.")
-            }
-            nl.endevelopment.semantic.Type.VOID -> if (value !is Value.VoidValue) {
-                throw RuntimeException("Function return type mismatch. Expected void.")
-            }
+            Type.INT -> if (value !is Value.IntValue) throw RuntimeException(location.format("Function return type mismatch. Expected Int."))
+            Type.FLOAT -> if (value !is Value.FloatValue) throw RuntimeException(location.format("Function return type mismatch. Expected Float."))
+            Type.BOOL -> if (value !is Value.BoolValue) throw RuntimeException(location.format("Function return type mismatch. Expected Bool."))
+            Type.STRING -> if (value !is Value.StringValue) throw RuntimeException(location.format("Function return type mismatch. Expected String."))
+            Type.LIST -> if (value !is Value.ListValue) throw RuntimeException(location.format("Function return type mismatch. Expected List."))
+            Type.VOID -> if (value !is Value.VoidValue) throw RuntimeException(location.format("Function return type mismatch. Expected void."))
         }
     }
 
-    /**
-     * Evaluates a binary operation expression.
-     * Handles short-circuit evaluation for logical operators.
-     */
     private fun evaluateBinaryOp(expr: Expr.BinaryOp): Value {
-        // Handle short-circuit logical operators
         if (expr.operator == "&&") {
             val leftVal = evaluate(expr.left, allowVoid = false)
             if (leftVal !is Value.BoolValue) {
-                throw RuntimeException("AND operator requires Bool operands.")
+                throw RuntimeException(expr.location.format("AND operator requires Bool operands."))
             }
             if (!leftVal.value) {
-                return Value.BoolValue(false)  // Short-circuit: return false without evaluating right
+                return Value.BoolValue(false)
             }
             val rightVal = evaluate(expr.right, allowVoid = false)
             if (rightVal !is Value.BoolValue) {
-                throw RuntimeException("AND operator requires Bool operands.")
+                throw RuntimeException(expr.location.format("AND operator requires Bool operands."))
             }
             return Value.BoolValue(rightVal.value)
         }
@@ -314,190 +314,140 @@ class Interpreter() {
         if (expr.operator == "||") {
             val leftVal = evaluate(expr.left, allowVoid = false)
             if (leftVal !is Value.BoolValue) {
-                throw RuntimeException("OR operator requires Bool operands.")
+                throw RuntimeException(expr.location.format("OR operator requires Bool operands."))
             }
             if (leftVal.value) {
-                return Value.BoolValue(true)  // Short-circuit: return true without evaluating right
+                return Value.BoolValue(true)
             }
             val rightVal = evaluate(expr.right, allowVoid = false)
             if (rightVal !is Value.BoolValue) {
-                throw RuntimeException("OR operator requires Bool operands.")
+                throw RuntimeException(expr.location.format("OR operator requires Bool operands."))
             }
             return Value.BoolValue(rightVal.value)
         }
 
-        // For non-short-circuit operators, evaluate both sides
         val leftVal = evaluate(expr.left, allowVoid = false)
         val rightVal = evaluate(expr.right, allowVoid = false)
 
         return when (expr.operator) {
-            "+" -> add(leftVal, rightVal)
-            "-" -> subtract(leftVal, rightVal)
-            "*" -> multiply(leftVal, rightVal)
-            "/" -> divide(leftVal, rightVal)
-            "%" -> modulo(leftVal, rightVal)
-            "==" -> equalsOp(leftVal, rightVal)
-            "!=" -> notEqualsOp(leftVal, rightVal)
-            "<" -> lessThan(leftVal, rightVal)
-            "<=" -> lessThanOrEqual(leftVal, rightVal)
-            ">" -> greaterThan(leftVal, rightVal)
-            ">=" -> greaterThanOrEqual(leftVal, rightVal)
-            else -> throw RuntimeException("Unknown operator '${expr.operator}'.")
+            "+" -> add(leftVal, rightVal, expr.location)
+            "-" -> subtract(leftVal, rightVal, expr.location)
+            "*" -> multiply(leftVal, rightVal, expr.location)
+            "/" -> divide(leftVal, rightVal, expr.location)
+            "%" -> modulo(leftVal, rightVal, expr.location)
+            "==" -> Value.BoolValue(leftVal == rightVal)
+            "!=" -> Value.BoolValue(leftVal != rightVal)
+            "<" -> lessThan(leftVal, rightVal, expr.location)
+            "<=" -> lessThanOrEqual(leftVal, rightVal, expr.location)
+            ">" -> greaterThan(leftVal, rightVal, expr.location)
+            ">=" -> greaterThanOrEqual(leftVal, rightVal, expr.location)
+            else -> throw RuntimeException(expr.location.format("Unknown operator '${expr.operator}'."))
         }
     }
 
-    /**
-     * Handles addition.
-     */
-    private fun add(left: Value, right: Value): Value {
+    private fun add(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value + right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value + right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() + right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value + right.value.toFloat())
             left is Value.StringValue && right is Value.StringValue -> Value.StringValue(left.value + right.value)
-            else -> throw RuntimeException("Unsupported operand types for '+': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '+': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles subtraction.
-     */
-    private fun subtract(left: Value, right: Value): Value {
+    private fun subtract(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value - right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value - right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() - right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value - right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '-': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '-': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles multiplication.
-     */
-    private fun multiply(left: Value, right: Value): Value {
+    private fun multiply(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.IntValue(left.value * right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.FloatValue(left.value * right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.FloatValue(left.value.toFloat() * right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.FloatValue(left.value * right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '*': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '*': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles division.
-     */
-    private fun divide(left: Value, right: Value): Value {
+    private fun divide(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> {
-                if (right.value == 0) throw RuntimeException("Division by zero.")
+                if (right.value == 0) throw RuntimeException(location.format("Division by zero."))
                 Value.IntValue(left.value / right.value)
             }
-
             left is Value.FloatValue && right is Value.FloatValue -> {
-                if (right.value == 0.0f) throw RuntimeException("Division by zero.")
+                if (right.value == 0.0f) throw RuntimeException(location.format("Division by zero."))
                 Value.FloatValue(left.value / right.value)
             }
-
             left is Value.IntValue && right is Value.FloatValue -> {
-                if (right.value == 0.0f) throw RuntimeException("Division by zero.")
+                if (right.value == 0.0f) throw RuntimeException(location.format("Division by zero."))
                 Value.FloatValue(left.value.toFloat() / right.value)
             }
-
             left is Value.FloatValue && right is Value.IntValue -> {
-                if (right.value == 0) throw RuntimeException("Division by zero.")
+                if (right.value == 0) throw RuntimeException(location.format("Division by zero."))
                 Value.FloatValue(left.value / right.value.toFloat())
             }
-
-            else -> throw RuntimeException("Unsupported operand types for '/': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '/': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles modulo operation.
-     */
-    private fun modulo(left: Value, right: Value): Value {
+    private fun modulo(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> {
-                if (right.value == 0) throw RuntimeException("Modulo by zero.")
+                if (right.value == 0) throw RuntimeException(location.format("Modulo by zero."))
                 Value.IntValue(left.value % right.value)
             }
-
-            else -> throw RuntimeException("Unsupported operand types for '%': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '%': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles equality check.
-     */
-    private fun equalsOp(left: Value, right: Value): Value {
-        return Value.BoolValue(left == right)
-    }
-
-    /**
-     * Handles inequality check.
-     */
-    private fun notEqualsOp(left: Value, right: Value): Value {
-        return Value.BoolValue(left != right)
-    }
-
-    /**
-     * Handles less than comparison.
-     */
-    private fun lessThan(left: Value, right: Value): Value {
+    private fun lessThan(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value < right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value < right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() < right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value < right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '<': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '<': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles less than or equal comparison.
-     */
-    private fun lessThanOrEqual(left: Value, right: Value): Value {
+    private fun lessThanOrEqual(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value <= right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value <= right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() <= right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value <= right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '<=': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '<=': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles greater than comparison.
-     */
-    private fun greaterThan(left: Value, right: Value): Value {
+    private fun greaterThan(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value > right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value > right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() > right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value > right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '>': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '>': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Handles greater than or equal comparison.
-     */
-    private fun greaterThanOrEqual(left: Value, right: Value): Value {
+    private fun greaterThanOrEqual(left: Value, right: Value, location: SourceLocation): Value {
         return when {
             left is Value.IntValue && right is Value.IntValue -> Value.BoolValue(left.value >= right.value)
             left is Value.FloatValue && right is Value.FloatValue -> Value.BoolValue(left.value >= right.value)
             left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() >= right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value >= right.value.toFloat())
-            else -> throw RuntimeException("Unsupported operand types for '>=': ${left::class.simpleName} and ${right::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Unsupported operand types for '>=': ${left::class.simpleName} and ${right::class.simpleName}."))
         }
     }
 
-    /**
-     * Converts a Value to its string representation for printing.
-     */
     private fun valueToString(value: Value): String {
         return when (value) {
             is Value.IntValue -> value.value.toString()
@@ -509,16 +459,10 @@ class Interpreter() {
         }
     }
 
-    /**
-     * Evaluates a condition represented by a Value.
-     * In this interpreter, booleans are directly used, and integers/floats interpret non-zero as true.
-     */
-    private fun evaluateCondition(value: Value): Boolean {
+    private fun evaluateCondition(value: Value, location: SourceLocation): Boolean {
         return when (value) {
             is Value.BoolValue -> value.value
-            is Value.IntValue -> value.value != 0
-            is Value.FloatValue -> value.value != 0.0f
-            else -> throw RuntimeException("Unsupported type for condition evaluation: ${value::class.simpleName}.")
+            else -> throw RuntimeException(location.format("Condition must evaluate to Bool."))
         }
     }
 }

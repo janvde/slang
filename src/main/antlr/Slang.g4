@@ -1,7 +1,4 @@
-// Slang.g4
 grammar Slang;
-
-// Parser Rules
 
 program
     : topLevelStatement* EOF
@@ -19,6 +16,9 @@ statement
     | printStmt
     | ifStmt
     | whileStmt
+    | forStmt
+    | breakStmt
+    | continueStmt
     | returnStmt
     | callStmt
     ;
@@ -47,6 +47,41 @@ whileStmt
     : 'while' '(' expr ')' block
     ;
 
+forStmt
+    : 'for' '(' forInit? ';' expr? ';' forUpdate? ')' block
+    ;
+
+forInit
+    : forVarDecl
+    | forAssign
+    | forCall
+    ;
+
+forUpdate
+    : forAssign
+    | forCall
+    ;
+
+forVarDecl
+    : ('let' | 'var') IDENT ':' type '=' expr
+    ;
+
+forAssign
+    : IDENT '=' expr
+    ;
+
+forCall
+    : IDENT '(' argList? ')'
+    ;
+
+breakStmt
+    : 'break' ';'
+    ;
+
+continueStmt
+    : 'continue' ';'
+    ;
+
 functionDef
     : 'fn' IDENT '(' paramList? ')' ':' type block
     ;
@@ -72,23 +107,23 @@ block
     ;
 
 expr
-    : TRUE                           # BoolTrueExpr
-    | FALSE                          # BoolFalseExpr
-    | '!' expr                       # NotExpr
-    | expr '[' expr ']'              # IndexExpr
-    | expr op=('*'|'/'|'%') expr     # MulDivExpr
-    | expr op=('+'|'-') expr         # AddSubExpr
-    | expr op=('>'|'>='|'<'|'<=') expr # ComparisonExpr
-    | expr op=('=='|'!=') expr       # EqualityExpr
-    | expr op='&&' expr              # AndExpr
-    | expr op='||' expr              # OrExpr
-    | '(' expr ')'                   # ParenExpr
-    | IDENT '(' argList? ')'         # CallExpr
-    | listLiteral                    # ListExpr
-    | STRING_LITERAL                 # StringExpr
-    | FLOAT                          # FloatExpr
-    | NUMBER                         # NumberExpr
-    | IDENT                          # VariableExpr
+    : TRUE                               # BoolTrueExpr
+    | FALSE                              # BoolFalseExpr
+    | '!' expr                           # NotExpr
+    | expr '[' expr ']'                  # IndexExpr
+    | expr op=('*'|'/'|'%') expr         # MulDivExpr
+    | expr op=('+'|'-') expr             # AddSubExpr
+    | expr op=('>'|'>='|'<'|'<=') expr   # ComparisonExpr
+    | expr op=('=='|'!=') expr           # EqualityExpr
+    | expr op='&&' expr                  # AndExpr
+    | expr op='||' expr                  # OrExpr
+    | '(' expr ')'                       # ParenExpr
+    | IDENT '(' argList? ')'             # CallExpr
+    | listLiteral                        # ListExpr
+    | STRING_LITERAL                     # StringExpr
+    | FLOAT                              # FloatExpr
+    | NUMBER                             # NumberExpr
+    | IDENT                              # VariableExpr
     ;
 
 argList
@@ -98,8 +133,6 @@ argList
 listLiteral
     : '[' (expr (',' expr)*)? ']'
     ;
-
-// Lexer Rules
 
 type
     : 'Int'
@@ -142,6 +175,3 @@ COMMENT
 LINE_COMMENT
     : '/*' .*? '*/' -> skip
     ;
-
-// Operators and Punctuation
-// Define literals directly in parser rules

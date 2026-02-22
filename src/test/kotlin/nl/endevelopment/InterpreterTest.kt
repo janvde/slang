@@ -157,7 +157,7 @@ class InterpreterTest {
     fun testIfStatementTrueBranch() {
         val source = """
             let x: Int = 10;
-            if (x) {
+            if (x > 0) {
                 print(1);
             } else {
                 print(0);
@@ -165,14 +165,14 @@ class InterpreterTest {
         """.trimIndent()
 
         val output = captureInterpreterOutput(source)
-        assertEquals("1", output) // non-zero is truthy
+        assertEquals("1", output)
     }
 
     @Test
     fun testIfStatementFalseBranch() {
         val source = """
             let x: Int = 0;
-            if (x) {
+            if (x > 0) {
                 print(1);
             } else {
                 print(0);
@@ -180,14 +180,14 @@ class InterpreterTest {
         """.trimIndent()
 
         val output = captureInterpreterOutput(source)
-        assertEquals("0", output) // zero is falsy
+        assertEquals("0", output)
     }
 
     @Test
     fun testIfWithoutElse() {
         val source = """
             let x: Int = 10;
-            if (x) {
+            if (x > 0) {
                 print(99);
             }
         """.trimIndent()
@@ -200,14 +200,14 @@ class InterpreterTest {
     fun testIfWithoutElseNotExecuted() {
         val source = """
             let x: Int = 0;
-            if (x) {
+            if (x > 0) {
                 print(99);
             }
             print(1);
         """.trimIndent()
 
         val output = captureInterpreterOutput(source)
-        assertEquals("1", output) // if not executed because x is 0 (falsy)
+        assertEquals("1", output)
     }
 
     @Test
@@ -242,7 +242,7 @@ class InterpreterTest {
         val source = """
             let x: Int = 10;
             let y: Int = x - 10;
-            if (y) {
+            if (y > 0) {
                 print(1);
             } else {
                 print(0);
@@ -250,7 +250,7 @@ class InterpreterTest {
         """.trimIndent()
 
         val output = captureInterpreterOutput(source)
-        assertEquals("0", output) // y = 0, which is falsy
+        assertEquals("0", output)
     }
 
     @Test
@@ -302,7 +302,7 @@ class InterpreterTest {
             let x: Int = 5;
             let y: Int = 3;
             let sum: Int = x + y;
-            if (sum) {
+            if (sum > 0) {
                 print(1);
             } else {
                 print(0);
@@ -310,7 +310,7 @@ class InterpreterTest {
         """.trimIndent()
 
         val output = captureInterpreterOutput(source)
-        assertEquals("1", output) // 5+3=8, which is truthy
+        assertEquals("1", output)
     }
 
     @Test
@@ -926,5 +926,111 @@ class InterpreterTest {
 
         val output = captureInterpreterOutput(source)
         assertEquals("3", output)
+    }
+
+    @Test
+    fun testLenString() {
+        val source = """
+            let text: String = "hello";
+            print(len(text));
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("5", output)
+    }
+
+    @Test
+    fun testLenEmptyString() {
+        val source = """
+            let text: String = "";
+            print(len(text));
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0", output)
+    }
+
+    @Test
+    fun testLenInvalidTypeProducesError() {
+        val source = "print(len(42));"
+        val output = captureInterpreterOutput(source)
+        assertTrue(output.contains("len expects a List or String argument"))
+    }
+
+    @Test
+    fun testConditionMustBeBool() {
+        val source = """
+            let x: Int = 1;
+            if (x) {
+                print(1);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertTrue(output.contains("Condition must evaluate to Bool"))
+    }
+
+    @Test
+    fun testBreakInWhileLoop() {
+        val source = """
+            var i: Int = 0;
+            while (i < 10) {
+                if (i == 3) {
+                    break;
+                }
+                print(i);
+                i = i + 1;
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1\n2", output)
+    }
+
+    @Test
+    fun testContinueInWhileLoop() {
+        val source = """
+            var i: Int = 0;
+            while (i < 5) {
+                i = i + 1;
+                if (i == 3) {
+                    continue;
+                }
+                print(i);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1\n2\n4\n5", output)
+    }
+
+    @Test
+    fun testForLoopExecution() {
+        val source = """
+            for (var i: Int = 0; i < 4; i = i + 1) {
+                print(i);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1\n2\n3", output)
+    }
+
+    @Test
+    fun testForLoopWithBreakAndContinue() {
+        val source = """
+            for (var i: Int = 0; i < 6; i = i + 1) {
+                if (i == 2) {
+                    continue;
+                }
+                if (i == 4) {
+                    break;
+                }
+                print(i);
+            }
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("0\n1\n3", output)
     }
 }
