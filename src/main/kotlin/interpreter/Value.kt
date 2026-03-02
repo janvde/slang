@@ -7,5 +7,6 @@ sealed class Value {
     data class BoolValue(val value: Boolean) : Value()
     data class StringValue(val value: String) : Value()
     data class ListValue(val elements: List<Value>) : Value()
+    data class ObjectValue(val className: String, val fields: MutableMap<String, Value>) : Value()
     object VoidValue : Value()
 }

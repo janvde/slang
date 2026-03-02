@@ -5,14 +5,36 @@ program
     ;
 
 topLevelStatement
-    : functionDef
+    : classDef
+    | functionDef
     | statement
+    ;
+
+classDef
+    : 'class' IDENT '(' classFieldList? ')' classBody?
+    ;
+
+classFieldList
+    : classField (',' classField)*
+    ;
+
+classField
+    : ('let' | 'var') IDENT ':' type
+    ;
+
+classBody
+    : '{' methodDef* '}'
+    ;
+
+methodDef
+    : 'fn' IDENT '(' paramList? ')' ':' type block
     ;
 
 statement
     : letStmt
     | varStmt
     | assignStmt
+    | memberAssignStmt
     | printStmt
     | ifStmt
     | whileStmt
@@ -20,6 +42,7 @@ statement
     | breakStmt
     | continueStmt
     | returnStmt
+    | memberCallStmt
     | callStmt
     ;
 
@@ -33,6 +56,10 @@ varStmt
 
 assignStmt
     : IDENT '=' expr ';'
+    ;
+
+memberAssignStmt
+    : expr '.' IDENT '=' expr ';'
     ;
 
 printStmt
@@ -102,6 +129,10 @@ callStmt
     : IDENT '(' argList? ')' ';'
     ;
 
+memberCallStmt
+    : expr '.' IDENT '(' argList? ')' ';'
+    ;
+
 block
     : '{' statement* '}'
     ;
@@ -109,7 +140,10 @@ block
 expr
     : TRUE                               # BoolTrueExpr
     | FALSE                              # BoolFalseExpr
+    | 'this'                             # ThisExpr
     | '!' expr                           # NotExpr
+    | expr '.' IDENT '(' argList? ')'    # MemberCallExpr
+    | expr '.' IDENT                     # MemberAccessExpr
     | expr '[' expr ']'                  # IndexExpr
     | expr op=('*'|'/'|'%') expr         # MulDivExpr
     | expr op=('+'|'-') expr             # AddSubExpr
@@ -141,6 +175,7 @@ type
     | 'Bool'
     | 'Void'
     | 'List'
+    | IDENT
     ;
 
 TRUE : 'true';

@@ -1,7 +1,9 @@
 package nl.endevelopment.parser
 
 import nl.endevelopment.ast.ASTNode
+import nl.endevelopment.ast.ClassField
 import nl.endevelopment.ast.Expr
+import nl.endevelopment.ast.MethodDef
 import nl.endevelopment.ast.Param
 import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.SourceLocation
@@ -22,20 +24,31 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
     }
 
     private fun parseType(typeText: String): Type {
-        return when (typeText) {
-            "Int" -> Type.INT
-            "Float" -> Type.FLOAT
-            "String" -> Type.STRING
-            "Bool" -> Type.BOOL
-            "Void" -> Type.VOID
-            "List" -> Type.LIST
-            else -> throw RuntimeException("Unknown type: $typeText")
-        }
+        return Type.fromName(typeText)
     }
 
     override fun visitProgram(ctx: SlangParser.ProgramContext): ASTNode {
         val statements = ctx.topLevelStatement().map { visit(it) as Stmt }
         return Program(statements)
+    }
+
+    override fun visitClassDef(ctx: SlangParser.ClassDefContext): ASTNode {
+        val name = ctx.IDENT().text
+        val fields = ctx.classFieldList()?.classField()?.map { fieldCtx ->
+            val mutable = fieldCtx.getChild(0).text == "var"
+            ClassField(
+                name = fieldCtx.IDENT().text,
+                type = parseType(fieldCtx.type().text),
+                mutable = mutable,
+                location = location(fieldCtx)
+            )
+        } ?: emptyList()
+
+        val methods = ctx.classBody()?.methodDef()?.map { methodCtx ->
+            buildMethodDef(methodCtx)
+        } ?: emptyList()
+
+        return Stmt.ClassDef(name, fields, methods, location(ctx))
     }
 
     override fun visitLetStmt(ctx: SlangParser.LetStmtContext): ASTNode {
@@ -56,6 +69,13 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val expr = visit(ctx.expr()) as Expr
         return Stmt.AssignStmt(name, expr, location(ctx))
+    }
+
+    override fun visitMemberAssignStmt(ctx: SlangParser.MemberAssignStmtContext): ASTNode {
+        val target = visit(ctx.expr(0)) as Expr
+        val member = ctx.IDENT().text
+        val value = visit(ctx.expr(1)) as Expr
+        return Stmt.MemberAssignStmt(target, member, value, location(ctx))
     }
 
     override fun visitPrintStmt(ctx: SlangParser.PrintStmtContext): ASTNode {
@@ -108,6 +128,10 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Stmt.FunctionDef(name, params, returnType, body, location(ctx))
     }
 
+    override fun visitMethodDef(ctx: SlangParser.MethodDefContext): ASTNode {
+        return buildMethodDef(ctx)
+    }
+
     override fun visitReturnStmt(ctx: SlangParser.ReturnStmtContext): ASTNode {
         val expr = ctx.expr()?.let { visit(it) as Expr }
         return Stmt.ReturnStmt(expr, location(ctx))
@@ -117,6 +141,13 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
         return Stmt.ExprStmt(Expr.Call(name, args, location(ctx)), location(ctx))
+    }
+
+    override fun visitMemberCallStmt(ctx: SlangParser.MemberCallStmtContext): ASTNode {
+        val receiver = visit(ctx.expr()) as Expr
+        val method = ctx.IDENT().text
+        val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
+        return Stmt.ExprStmt(Expr.MemberCall(receiver, method, args, location(ctx)), location(ctx))
     }
 
     private fun buildForInit(ctx: SlangParser.ForInitContext): Stmt {
@@ -204,6 +235,18 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Expr.Call(name, args, location(ctx))
     }
 
+    override fun visitMemberCallExpr(ctx: SlangParser.MemberCallExprContext): ASTNode {
+        val receiver = visit(ctx.expr()) as Expr
+        val method = ctx.IDENT().text
+        val args = ctx.argList()?.expr()?.map { visit(it) as Expr } ?: emptyList()
+        return Expr.MemberCall(receiver, method, args, location(ctx))
+    }
+
+    override fun visitMemberAccessExpr(ctx: SlangParser.MemberAccessExprContext): ASTNode {
+        val receiver = visit(ctx.expr()) as Expr
+        return Expr.MemberAccess(receiver, ctx.IDENT().text, location(ctx))
+    }
+
     override fun visitListExpr(ctx: SlangParser.ListExprContext): ASTNode {
         val elements = ctx.listLiteral().expr().map { visit(it) as Expr }
         return Expr.ListLiteral(elements, location(ctx))
@@ -246,7 +289,23 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return Expr.BoolLiteral(false, location(ctx))
     }
 
+    override fun visitThisExpr(ctx: SlangParser.ThisExprContext): ASTNode {
+        return Expr.This(location(ctx))
+    }
+
     override fun visitVariableExpr(ctx: SlangParser.VariableExprContext): ASTNode {
         return Expr.Variable(ctx.IDENT().text, location(ctx))
+    }
+
+    private fun buildMethodDef(ctx: SlangParser.MethodDefContext): MethodDef {
+        val name = ctx.IDENT().text
+        val params = ctx.paramList()?.param()?.map {
+            val paramName = it.IDENT().text
+            val paramType = parseType(it.type().text)
+            Param(paramName, paramType, location(it))
+        } ?: emptyList()
+        val returnType = parseType(ctx.type().text)
+        val body = ctx.block().statement().map { visit(it) as Stmt }
+        return MethodDef(name, params, returnType, body, location(ctx))
     }
 }

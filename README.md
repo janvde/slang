@@ -16,6 +16,8 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 - **Loop control**: `break` and `continue`
 - **Comparison operators** (>, <, >=, <=, ==, !=)
 - **Functions** with parameters, return values, and `return` statements
+- **Classes (class-lite)** with constructor fields, instance methods, and `this` (no inheritance)
+- **Member operations**: field access (`obj.x`), field assignment (`obj.x = 1`), method calls (`obj.method()`)
 - **List literals** with indexing (`xs[0]`) and length via `len(xs)`
 - **Built-in length**: `len(List)` and `len(String)`
 - **Strict Bool conditions**: `if` / `while` / `for` conditions must be `Bool`
@@ -270,7 +272,21 @@ fn add(a: Int, b: Int): Int {
 }
 ```
 
-**Data Types:** Int, Float, Bool, String, List, Void
+**Classes:**
+```slang
+class Counter(var value: Int) {
+    fn add(delta: Int): Void {
+        this.value = this.value + delta;
+        return;
+    }
+}
+
+let c: Counter = Counter(1);
+c.add(2);
+print(c.value);  // 3
+```
+
+**Data Types:** Int, Float, Bool, String, List, Void, and user-defined `class` types
 
 ### Condition Semantics
 

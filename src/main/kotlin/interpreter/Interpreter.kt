@@ -1,6 +1,7 @@
 package nl.endevelopment.interpreter
 
 import nl.endevelopment.ast.Expr
+import nl.endevelopment.ast.MethodDef
 import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
@@ -8,8 +9,16 @@ import nl.endevelopment.semantic.Type
 
 class Interpreter {
 
+    private data class ClassFieldInfo(val mutable: Boolean)
+    private data class ClassRuntimeInfo(
+        val fieldOrder: List<String>,
+        val fieldInfo: Map<String, ClassFieldInfo>,
+        val methods: Map<String, MethodDef>
+    )
+
     private val variableEnv = VariableEnvironment()
     private val functions = mutableMapOf<String, Stmt.FunctionDef>()
+    private val classes = mutableMapOf<String, ClassRuntimeInfo>()
     private var functionDepth = 0
     private var loopDepth = 0
 
@@ -20,8 +29,9 @@ class Interpreter {
     fun interpret(program: Program) {
         variableEnv.enterScope()
         try {
+            program.statements.filterIsInstance<Stmt.ClassDef>().forEach { registerClass(it) }
             program.statements.filterIsInstance<Stmt.FunctionDef>().forEach { registerFunction(it) }
-            program.statements.filterNot { it is Stmt.FunctionDef }.forEach { execute(it) }
+            program.statements.filterNot { it is Stmt.FunctionDef || it is Stmt.ClassDef }.forEach { execute(it) }
         } catch (e: RuntimeException) {
             println("Runtime Error: ${e.message}")
         } finally {
@@ -40,6 +50,7 @@ class Interpreter {
             is Stmt.LetStmt -> handleLetStmt(stmt)
             is Stmt.VarStmt -> handleVarStmt(stmt)
             is Stmt.AssignStmt -> handleAssignStmt(stmt)
+            is Stmt.MemberAssignStmt -> handleMemberAssignStmt(stmt)
             is Stmt.PrintStmt -> handlePrintStmt(stmt)
             is Stmt.IfStmt -> handleIfStmt(stmt)
             is Stmt.WhileStmt -> handleWhileStmt(stmt)
@@ -49,6 +60,7 @@ class Interpreter {
             is Stmt.FunctionDef -> registerFunction(stmt)
             is Stmt.ReturnStmt -> handleReturnStmt(stmt)
             is Stmt.ExprStmt -> handleExprStmt(stmt)
+            is Stmt.ClassDef -> registerClass(stmt)
         }
     }
 
@@ -143,6 +155,23 @@ class Interpreter {
         variableEnv.set(stmt.name, value, stmt.location)
     }
 
+    private fun handleMemberAssignStmt(stmt: Stmt.MemberAssignStmt) {
+        val target = evaluate(stmt.target, allowVoid = false)
+        if (target !is Value.ObjectValue) {
+            throw RuntimeException(stmt.target.location.format("Field assignment target must be a class instance."))
+        }
+
+        val classInfo = classes[target.className]
+            ?: throw RuntimeException(stmt.location.format("Unknown class '${target.className}'."))
+        val fieldInfo = classInfo.fieldInfo[stmt.member]
+            ?: throw RuntimeException(stmt.location.format("Class '${target.className}' has no field '${stmt.member}'."))
+        if (!fieldInfo.mutable) {
+            throw RuntimeException(stmt.location.format("Cannot assign to immutable field '${stmt.member}' in class '${target.className}'."))
+        }
+
+        target.fields[stmt.member] = evaluate(stmt.expr, allowVoid = false)
+    }
+
     private fun handlePrintStmt(stmt: Stmt.PrintStmt) {
         val value = evaluate(stmt.expr, allowVoid = false)
         println(valueToString(value))
@@ -170,13 +199,46 @@ class Interpreter {
             is Expr.FloatLiteral -> Value.FloatValue(expr.value)
             is Expr.BoolLiteral -> Value.BoolValue(expr.value)
             is Expr.StringLiteral -> Value.StringValue(expr.value)
+            is Expr.This -> variableEnv.get("this", expr.location)
             is Expr.Variable -> variableEnv.get(expr.name, expr.location)
             is Expr.UnaryOp -> evaluateUnaryOp(expr)
             is Expr.BinaryOp -> evaluateBinaryOp(expr)
             is Expr.Call -> callFunction(expr, allowVoid)
+            is Expr.MemberAccess -> evaluateMemberAccess(expr)
+            is Expr.MemberCall -> callMemberFunction(expr, allowVoid)
             is Expr.ListLiteral -> Value.ListValue(expr.elements.map { evaluate(it, allowVoid = false) })
             is Expr.Index -> evaluateIndex(expr)
         }
+    }
+
+    private fun registerClass(stmt: Stmt.ClassDef) {
+        if (classes.containsKey(stmt.name)) {
+            throw RuntimeException(stmt.location.format("Class '${stmt.name}' is already defined."))
+        }
+
+        val fieldInfo = linkedMapOf<String, ClassFieldInfo>()
+        val fieldOrder = mutableListOf<String>()
+        stmt.fields.forEach { field ->
+            if (fieldInfo.containsKey(field.name)) {
+                throw RuntimeException(field.location.format("Field '${field.name}' is already defined in class '${stmt.name}'."))
+            }
+            fieldInfo[field.name] = ClassFieldInfo(field.mutable)
+            fieldOrder.add(field.name)
+        }
+
+        val methods = linkedMapOf<String, MethodDef>()
+        stmt.methods.forEach { method ->
+            if (methods.containsKey(method.name)) {
+                throw RuntimeException(method.location.format("Method '${method.name}' is already defined in class '${stmt.name}'."))
+            }
+            methods[method.name] = method
+        }
+
+        classes[stmt.name] = ClassRuntimeInfo(
+            fieldOrder = fieldOrder,
+            fieldInfo = fieldInfo,
+            methods = methods
+        )
     }
 
     private fun registerFunction(stmt: Stmt.FunctionDef) {
@@ -192,6 +254,10 @@ class Interpreter {
     private fun callFunction(expr: Expr.Call, allowVoid: Boolean): Value {
         if (expr.name == "len") {
             return evalLen(expr)
+        }
+
+        classes[expr.name]?.let { classInfo ->
+            return constructObject(expr, classInfo)
         }
 
         val function = functions[expr.name]
@@ -210,7 +276,7 @@ class Interpreter {
         variableEnv.enterScope()
         try {
             function.params.forEachIndexed { index, param ->
-                variableEnv.define(param.name, argValues[index])
+                variableEnv.define(param.name, argValues[index], immutable = false)
             }
             try {
                 executeBlock(function.body)
@@ -227,6 +293,63 @@ class Interpreter {
             throw RuntimeException(expr.location.format("Function '${function.name}' must return a value."))
         }
         return Value.VoidValue
+    }
+
+    private fun callMemberFunction(expr: Expr.MemberCall, allowVoid: Boolean): Value {
+        val receiver = evaluate(expr.receiver, allowVoid = false)
+        if (receiver !is Value.ObjectValue) {
+            throw RuntimeException(expr.receiver.location.format("Method call requires a class instance receiver."))
+        }
+
+        val classInfo = classes[receiver.className]
+            ?: throw RuntimeException(expr.location.format("Unknown class '${receiver.className}'."))
+        val method = classInfo.methods[expr.method]
+            ?: throw RuntimeException(expr.location.format("Class '${receiver.className}' has no method '${expr.method}'."))
+
+        if (expr.args.size != method.params.size) {
+            throw RuntimeException(expr.location.format("Method '${expr.method}' expects ${method.params.size} arguments, got ${expr.args.size}."))
+        }
+        if (!allowVoid && method.returnType == Type.VOID) {
+            throw RuntimeException(expr.location.format("Cannot use void method '${expr.method}' in an expression."))
+        }
+
+        val argValues = expr.args.map { evaluate(it, allowVoid = false) }
+
+        functionDepth++
+        variableEnv.enterScope()
+        try {
+            variableEnv.define("this", receiver, immutable = true)
+            method.params.forEachIndexed { index, param ->
+                variableEnv.define(param.name, argValues[index], immutable = false)
+            }
+            try {
+                executeBlock(method.body)
+            } catch (signal: ReturnSignal) {
+                validateReturnType(method.returnType, signal.value, expr.location)
+                return signal.value
+            }
+        } finally {
+            variableEnv.exitScope()
+            functionDepth--
+        }
+
+        if (method.returnType != Type.VOID) {
+            throw RuntimeException(expr.location.format("Method '${expr.method}' must return a value."))
+        }
+        return Value.VoidValue
+    }
+
+    private fun constructObject(expr: Expr.Call, classInfo: ClassRuntimeInfo): Value {
+        if (expr.args.size != classInfo.fieldOrder.size) {
+            throw RuntimeException(expr.location.format("Constructor '${expr.name}' expects ${classInfo.fieldOrder.size} arguments, got ${expr.args.size}."))
+        }
+
+        val fields = mutableMapOf<String, Value>()
+        classInfo.fieldOrder.forEachIndexed { index, fieldName ->
+            fields[fieldName] = evaluate(expr.args[index], allowVoid = false)
+        }
+
+        return Value.ObjectValue(expr.name, fields)
     }
 
     private fun handleReturnStmt(stmt: Stmt.ReturnStmt) {
@@ -251,6 +374,16 @@ class Interpreter {
             is Value.StringValue -> Value.IntValue(value.value.length)
             else -> throw RuntimeException(expr.args[0].location.format("len expects a List or String argument."))
         }
+    }
+
+    private fun evaluateMemberAccess(expr: Expr.MemberAccess): Value {
+        val receiver = evaluate(expr.receiver, allowVoid = false)
+        if (receiver !is Value.ObjectValue) {
+            throw RuntimeException(expr.receiver.location.format("Member access requires a class instance receiver."))
+        }
+
+        return receiver.fields[expr.member]
+            ?: throw RuntimeException(expr.location.format("Class '${receiver.className}' has no field '${expr.member}'."))
     }
 
     private fun evaluateIndex(expr: Expr.Index): Value {
@@ -287,11 +420,16 @@ class Interpreter {
     private fun validateReturnType(expected: Type, value: Value, location: SourceLocation) {
         when (expected) {
             Type.INT -> if (value !is Value.IntValue) throw RuntimeException(location.format("Function return type mismatch. Expected Int."))
-            Type.FLOAT -> if (value !is Value.FloatValue) throw RuntimeException(location.format("Function return type mismatch. Expected Float."))
+            Type.FLOAT -> if (value !is Value.FloatValue && value !is Value.IntValue) throw RuntimeException(location.format("Function return type mismatch. Expected Float."))
             Type.BOOL -> if (value !is Value.BoolValue) throw RuntimeException(location.format("Function return type mismatch. Expected Bool."))
             Type.STRING -> if (value !is Value.StringValue) throw RuntimeException(location.format("Function return type mismatch. Expected String."))
             Type.LIST -> if (value !is Value.ListValue) throw RuntimeException(location.format("Function return type mismatch. Expected List."))
             Type.VOID -> if (value !is Value.VoidValue) throw RuntimeException(location.format("Function return type mismatch. Expected void."))
+            is Type.CLASS -> {
+                if (value !is Value.ObjectValue || value.className != expected.name) {
+                    throw RuntimeException(location.format("Function return type mismatch. Expected ${expected.name}."))
+                }
+            }
         }
     }
 
@@ -455,6 +593,7 @@ class Interpreter {
             is Value.BoolValue -> value.value.toString()
             is Value.StringValue -> value.value
             is Value.ListValue -> value.elements.joinToString(prefix = "[", postfix = "]") { valueToString(it) }
+            is Value.ObjectValue -> "<${value.className} object>"
             is Value.VoidValue -> "void"
         }
     }

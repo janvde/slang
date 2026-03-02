@@ -113,4 +113,53 @@ class ParserTest {
         assertEquals(2, secondStmt.location.line)
         assertTrue(secondStmt.location.column > 0)
     }
+
+    @Test
+    fun testClassDefinitionParses() {
+        val source = """
+            class Point(var x: Int, let y: Int) {
+                fn sum(): Int {
+                    return this.x + this.y;
+                }
+            }
+        """.trimIndent()
+
+        val ast = parse(source)
+        assertEquals(1, ast.statements.size)
+        val stmt = ast.statements[0]
+        assertIs<Stmt.ClassDef>(stmt)
+        assertEquals("Point", stmt.name)
+        assertEquals(2, stmt.fields.size)
+        assertEquals(1, stmt.methods.size)
+        assertTrue(stmt.fields[0].mutable)
+        assertTrue(!stmt.fields[1].mutable)
+        assertEquals("sum", stmt.methods[0].name)
+    }
+
+    @Test
+    fun testMemberAssignAndCallStatementsParse() {
+        val source = """
+            class Counter(var value: Int) {
+                fn inc(delta: Int): Void {
+                    this.value = this.value + delta;
+                    return;
+                }
+            }
+            let c: Counter = Counter(1);
+            c.value = 2;
+            c.inc(3);
+            print(c.value);
+        """.trimIndent()
+
+        val ast = parse(source)
+        assertEquals(5, ast.statements.size)
+        assertIs<Stmt.ClassDef>(ast.statements[0])
+        assertIs<Stmt.MemberAssignStmt>(ast.statements[2])
+        val callStmt = ast.statements[3]
+        assertIs<Stmt.ExprStmt>(callStmt)
+        assertIs<Expr.MemberCall>(callStmt.expr)
+        val printStmt = ast.statements[4]
+        assertIs<Stmt.PrintStmt>(printStmt)
+        assertIs<Expr.MemberAccess>(printStmt.expr)
+    }
 }

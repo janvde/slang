@@ -297,4 +297,39 @@ class CodeGeneratorTest {
         }
         assertTrue(error.message?.contains("If condition must be Bool") == true)
     }
+
+    @Test
+    fun testClassConstructionAndFieldAccessGeneratesStructAndMalloc() {
+        val source = """
+            class Point(var x: Int, var y: Int) {}
+            let p: Point = Point(1, 2);
+            print(p.x);
+        """.trimIndent()
+
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("%Class_Point = type { i32, i32 }"))
+        assertTrue(ir.contains("declare ptr @malloc(i64)"))
+        assertTrue(ir.contains("call ptr @malloc"))
+        assertTrue(ir.contains("getelementptr inbounds %Class_Point"))
+    }
+
+    @Test
+    fun testClassMethodLoweredToMangledFunction() {
+        val source = """
+            class Counter(var value: Int) {
+                fn add(delta: Int): Void {
+                    this.value = this.value + delta;
+                    return;
+                }
+            }
+            let c: Counter = Counter(1);
+            c.add(2);
+            print(c.value);
+        """.trimIndent()
+
+        val ir = generateIR(source)
+        assertTrue(ir.contains("@Counter__add"))
+        assertTrue(ir.contains("call void @Counter__add"))
+    }
 }

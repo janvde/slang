@@ -124,3 +124,10 @@ while (is_running && ticks < 5) {
     ticks = ticks + 1;
 }
 
+
+for (var j: Int = 0; j < 10; j = j + 1) {
+    if (j == 4) { continue; }
+    if (j == 8) { break; }
+    print(j);
+}
+

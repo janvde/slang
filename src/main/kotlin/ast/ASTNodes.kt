@@ -24,10 +24,13 @@ sealed class Expr(open val location: SourceLocation = SourceLocation.UNKNOWN) : 
     data class FloatLiteral(val value: Float, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class BoolLiteral(val value: Boolean, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class StringLiteral(val value: String, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
+    data class This(override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class Variable(val name: String, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class UnaryOp(val operator: String, val operand: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class BinaryOp(val left: Expr, val operator: String, val right: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class Call(val name: String, val args: List<Expr>, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
+    data class MemberAccess(val receiver: Expr, val member: String, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
+    data class MemberCall(val receiver: Expr, val method: String, val args: List<Expr>, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class ListLiteral(val elements: List<Expr>, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
     data class Index(val target: Expr, val index: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Expr(location)
 }
@@ -37,6 +40,12 @@ sealed class Stmt(open val location: SourceLocation = SourceLocation.UNKNOWN) : 
     data class LetStmt(val name: String, val type: Type, val expr: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
     data class VarStmt(val name: String, val type: Type, val expr: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
     data class AssignStmt(val name: String, val expr: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
+    data class MemberAssignStmt(
+        val target: Expr,
+        val member: String,
+        val expr: Expr,
+        override val location: SourceLocation = SourceLocation.UNKNOWN
+    ) : Stmt(location)
     data class PrintStmt(val expr: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
     data class IfStmt(
         val condition: Expr,
@@ -68,9 +77,29 @@ sealed class Stmt(open val location: SourceLocation = SourceLocation.UNKNOWN) : 
 
     data class ReturnStmt(val expr: Expr?, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
     data class ExprStmt(val expr: Expr, override val location: SourceLocation = SourceLocation.UNKNOWN) : Stmt(location)
+    data class ClassDef(
+        val name: String,
+        val fields: List<ClassField>,
+        val methods: List<MethodDef>,
+        override val location: SourceLocation = SourceLocation.UNKNOWN
+    ) : Stmt(location)
 }
 
 data class Param(val name: String, val type: Type, val location: SourceLocation = SourceLocation.UNKNOWN) : ASTNode()
+data class ClassField(
+    val name: String,
+    val type: Type,
+    val mutable: Boolean,
+    val location: SourceLocation = SourceLocation.UNKNOWN
+) : ASTNode()
+
+data class MethodDef(
+    val name: String,
+    val params: List<Param>,
+    val returnType: Type,
+    val body: List<Stmt>,
+    val location: SourceLocation = SourceLocation.UNKNOWN
+) : ASTNode()
 
 // Program
 data class Program(val statements: List<Stmt>) : ASTNode()

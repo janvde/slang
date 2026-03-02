@@ -1,12 +1,39 @@
 package nl.endevelopment.semantic
 
-enum class Type {
-    INT,
-    FLOAT,
-    BOOL,
-    STRING,
-    LIST,
-    VOID
+sealed class Type {
+    data object INT : Type()
+    data object FLOAT : Type()
+    data object BOOL : Type()
+    data object STRING : Type()
+    data object LIST : Type()
+    data object VOID : Type()
+    data class CLASS(val name: String) : Type()
+
+    companion object {
+        fun fromName(name: String): Type {
+            return when (name) {
+                "Int" -> INT
+                "Float" -> FLOAT
+                "Bool" -> BOOL
+                "String" -> STRING
+                "List" -> LIST
+                "Void" -> VOID
+                else -> CLASS(name)
+            }
+        }
+    }
+
+    override fun toString(): String {
+        return when (this) {
+            INT -> "Int"
+            FLOAT -> "Float"
+            BOOL -> "Bool"
+            STRING -> "String"
+            LIST -> "List"
+            VOID -> "Void"
+            is CLASS -> name
+        }
+    }
 }
 
 class SemanticSymbolTable {

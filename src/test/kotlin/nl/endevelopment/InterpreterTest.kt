@@ -1033,4 +1033,48 @@ class InterpreterTest {
         val output = captureInterpreterOutput(source)
         assertEquals("0\n1\n3", output)
     }
+
+    @Test
+    fun testClassConstructionAndFieldRead() {
+        val source = """
+            class Point(var x: Int, var y: Int) {}
+            let p: Point = Point(1, 2);
+            print(p.x);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("1", output)
+    }
+
+    @Test
+    fun testClassAliasingUsesReferenceSemantics() {
+        val source = """
+            class Box(var value: Int) {}
+            let p: Box = Box(1);
+            let alias: Box = p;
+            alias.value = 5;
+            print(p.value);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("5", output)
+    }
+
+    @Test
+    fun testClassMethodCallWithThis() {
+        val source = """
+            class Counter(var value: Int) {
+                fn add(delta: Int): Void {
+                    this.value = this.value + delta;
+                    return;
+                }
+            }
+            let c: Counter = Counter(1);
+            c.add(4);
+            print(c.value);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("5", output)
+    }
 }

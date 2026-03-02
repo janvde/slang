@@ -429,4 +429,35 @@ class CompilerTest {
             tempOutput.delete()
         }
     }
+
+    @Test
+    fun testClassProgramCompilesAndRuns() {
+        val source = """
+            class Counter(var value: Int) {
+                fn add(delta: Int): Void {
+                    this.value = this.value + delta;
+                    return;
+                }
+            }
+            let c: Counter = Counter(1);
+            c.add(4);
+            print(c.value);
+        """.trimIndent()
+
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(output.contains("5"))
+            assertTrue(tempOutput.exists())
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("@Counter__add"))
+            assertTrue(ir.contains("%Class_Counter = type { i32 }"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
 }

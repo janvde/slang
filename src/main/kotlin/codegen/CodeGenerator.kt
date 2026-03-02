@@ -1,6 +1,7 @@
 package codegen
 
 import nl.endevelopment.ast.Expr
+import nl.endevelopment.ast.MethodDef
 import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
@@ -9,24 +10,29 @@ import org.bytedeco.javacpp.PointerPointer
 import org.bytedeco.llvm.LLVM.*
 import org.bytedeco.llvm.global.LLVM.*
 
-class CodeGenerator() {
+class CodeGenerator {
     private val context: LLVMContextRef = LLVMContextCreate()
     private val module: LLVMModuleRef = LLVMModuleCreateWithNameInContext("my_module", context)
     private val builder: LLVMBuilderRef = LLVMCreateBuilderInContext(context)
-    private var codegenSymbolTable = mutableMapOf<String, SymbolInfo>() // Maps variable names to type + pointer
+    private var codegenSymbolTable = mutableMapOf<String, SymbolInfo>()
 
-    // Predefined format strings
     private val formatStrings: MutableMap<Type, LLVMValueRef> = mutableMapOf()
 
-    // Store function types for later use in calls
     private lateinit var printfFuncType: LLVMTypeRef
     private val strlenFuncType: LLVMTypeRef = run {
         val paramTypes = PointerPointer<LLVMTypeRef>(1)
         paramTypes.put(0, LLVMPointerType(LLVMInt8TypeInContext(context), 0))
         LLVMFunctionType(LLVMInt64TypeInContext(context), paramTypes, 1, 0)
     }
+    private lateinit var mallocFuncType: LLVMTypeRef
+
     private val functions = mutableMapOf<String, FunctionInfo>()
+    private val classStructTypes = mutableMapOf<String, LLVMTypeRef>()
+    private val classes = mutableMapOf<String, ClassInfo>()
+
     private var currentFunctionReturnType: Type? = null
+    private var currentClassName: String? = null
+
     private val listStructType: LLVMTypeRef = LLVMStructCreateNamed(context, "List")
     private val loopTargets = mutableListOf<LoopTarget>()
 
@@ -35,7 +41,24 @@ class CodeGenerator() {
         val returnType: Type,
         val paramTypes: List<Type>,
         val llvmFunc: LLVMValueRef,
-        val llvmType: LLVMTypeRef
+        val llvmType: LLVMTypeRef,
+        val ownerClass: String? = null
+    )
+
+    private data class ClassFieldInfo(
+        val name: String,
+        val type: Type,
+        val mutable: Boolean,
+        val index: Int
+    )
+
+    private data class ClassInfo(
+        val name: String,
+        val structType: LLVMTypeRef,
+        val fields: List<ClassFieldInfo>,
+        val fieldsByName: Map<String, ClassFieldInfo>,
+        val methods: MutableMap<String, FunctionInfo>,
+        val methodsAst: MutableMap<String, MethodDef>
     )
 
     private data class SymbolInfo(
@@ -49,18 +72,13 @@ class CodeGenerator() {
         val breakBlock: LLVMBasicBlockRef
     )
 
-
     init {
-        // Initialize LLVM components
         LLVMInitializeNativeTarget()
         LLVMInitializeNativeAsmPrinter()
         LLVMInitializeNativeAsmParser()
 
         declareListType()
-
-        // Declare external functions like printf
         declarePrintf()
-
         declareFormatStrings()
     }
 
@@ -76,20 +94,33 @@ class CodeGenerator() {
     }
 
     fun generate(program: Program) {
-        // Declare function signatures first
+        val classDefs = program.statements.filterIsInstance<Stmt.ClassDef>()
+
+        declareClassTypes(classDefs)
+
         program.statements.filterIsInstance<Stmt.FunctionDef>()
             .forEach { declareFunction(it) }
 
-        // Generate function bodies
+        classDefs.forEach { classDef ->
+            classDef.methods.forEach { method ->
+                declareMethod(classDef.name, method)
+            }
+        }
+
         program.statements.filterIsInstance<Stmt.FunctionDef>()
             .forEach { generateFunctionBody(it) }
 
-        // Define main function
+        classDefs.forEach { classDef ->
+            classDef.methods.forEach { method ->
+                generateMethodBody(classDef.name, method)
+            }
+        }
+
         val mainFuncType = LLVMFunctionType(
-            LLVMInt32TypeInContext(context), // Return type: i32
-            LLVMTypeRef(),                  // Parameter types: none
-            0,                               // Is variadic: false
-            0                                // Is varargs: false
+            LLVMInt32TypeInContext(context),
+            LLVMTypeRef(),
+            0,
+            0
         )
         val mainFunction = LLVMAddFunction(module, "main", mainFuncType)
         val entry = LLVMAppendBasicBlockInContext(context, mainFunction, "entry")
@@ -101,21 +132,23 @@ class CodeGenerator() {
         val previousReturnType = currentFunctionReturnType
         currentFunctionReturnType = Type.INT
 
-        // Generate code for each statement
+        val previousClass = currentClassName
+        currentClassName = null
+
         program.statements.forEach {
-            if (it !is Stmt.FunctionDef) {
+            if (it !is Stmt.FunctionDef && it !is Stmt.ClassDef) {
                 if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
                     visit(it)
                 }
             }
         }
 
-        // Return 0
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
             LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
         }
 
         currentFunctionReturnType = previousReturnType
+        currentClassName = previousClass
         codegenSymbolTable = previousSymbols
     }
 
@@ -125,12 +158,14 @@ class CodeGenerator() {
             is Stmt.LetStmt -> visit(stmt)
             is Stmt.VarStmt -> visit(stmt)
             is Stmt.AssignStmt -> visit(stmt)
+            is Stmt.MemberAssignStmt -> visit(stmt)
             is Stmt.PrintStmt -> visit(stmt)
             is Stmt.WhileStmt -> visit(stmt)
             is Stmt.ForStmt -> visit(stmt)
             is Stmt.BreakStmt -> visit(stmt)
             is Stmt.ContinueStmt -> visit(stmt)
             is Stmt.FunctionDef -> {}
+            is Stmt.ClassDef -> {}
             is Stmt.ReturnStmt -> visit(stmt)
             is Stmt.ExprStmt -> visit(stmt)
         }
@@ -138,31 +173,14 @@ class CodeGenerator() {
 
     private fun visit(stmt: Stmt.LetStmt) {
         val exprValue = visit(stmt.expr)
-        // Allocate space based on the declared type
-        val llvmType = when (stmt.type) {
-            Type.INT -> LLVMInt32TypeInContext(context)
-            Type.FLOAT -> LLVMFloatTypeInContext(context)
-            Type.BOOL -> LLVMInt1TypeInContext(context)
-            Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
-            Type.LIST -> LLVMPointerType(listStructType, 0)
-            Type.VOID -> LLVMVoidTypeInContext(context)
-        }
-        val varPtr = LLVMBuildAlloca(builder, llvmType, stmt.name)
+        val varPtr = LLVMBuildAlloca(builder, llvmTypeFor(stmt.type), stmt.name)
         LLVMBuildStore(builder, exprValue, varPtr)
         codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = true)
     }
 
     private fun visit(stmt: Stmt.VarStmt) {
         val exprValue = visit(stmt.expr)
-        val llvmType = when (stmt.type) {
-            Type.INT -> LLVMInt32TypeInContext(context)
-            Type.FLOAT -> LLVMFloatTypeInContext(context)
-            Type.BOOL -> LLVMInt1TypeInContext(context)
-            Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
-            Type.LIST -> LLVMPointerType(listStructType, 0)
-            Type.VOID -> LLVMVoidTypeInContext(context)
-        }
-        val varPtr = LLVMBuildAlloca(builder, llvmType, stmt.name)
+        val varPtr = LLVMBuildAlloca(builder, llvmTypeFor(stmt.type), stmt.name)
         LLVMBuildStore(builder, exprValue, varPtr)
         codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = false)
     }
@@ -179,40 +197,55 @@ class CodeGenerator() {
         LLVMBuildStore(builder, exprValue, symbol.ptr)
     }
 
+    private fun visit(stmt: Stmt.MemberAssignStmt) {
+        val targetType = inferExprType(stmt.target)
+        val classType = targetType as? Type.CLASS
+            ?: fail(stmt.target.location, "Field assignment target must be a class instance.")
+        val classInfo = classes[classType.name]
+            ?: fail(stmt.target.location, "Unknown class '${classType.name}'.")
+        val field = classInfo.fieldsByName[stmt.member]
+            ?: fail(stmt.location, "Class '${classType.name}' has no field '${stmt.member}'.")
 
-    /**
-     * Generates LLVM IR for a PrintStmt.
-     */
+        if (!field.mutable) {
+            fail(stmt.location, "Cannot assign to immutable field '${stmt.member}' in class '${classType.name}'.")
+        }
+
+        val targetValue = visit(stmt.target)
+        val fieldPtr = LLVMBuildStructGEP2(builder, classInfo.structType, targetValue, field.index, "${stmt.member}_ptr")
+        val value = visit(stmt.expr)
+        LLVMBuildStore(builder, value, fieldPtr)
+    }
+
     private fun visit(stmt: Stmt.PrintStmt) {
-        // Visit the expression to be printed and get its LLVMValueRef
-        val exprValue = visit(stmt.expr)
+        emitPrint(stmt.expr, stmt.expr.location)
+    }
 
-        // Get the printf function, declaring it if not already declared
+    private fun emitPrint(expr: Expr, location: SourceLocation) {
+        val exprValue = visit(expr)
         val printfFunc = LLVMGetNamedFunction(module, "printf") ?: declarePrintf()
-
-        // Determine the type of the expression
-        val exprType = inferExprType(stmt.expr)
+        val exprType = inferExprType(expr)
 
         if (exprType == Type.LIST) {
             emitPrintList(exprValue, printfFunc)
             return
         }
 
-        // Retrieve the corresponding format string
+        if (exprType is Type.CLASS) {
+            fail(location, "Printing class instances is not supported in v1.")
+        }
+
         val formatStr = formatStrings[exprType]
             ?: throw Exception("No format string found for type: $exprType")
 
-        // Get a pointer to the first element of the format string array ([N x i8] -> i8*)
         val zero = LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0)
         val indices = PointerPointer<LLVMValueRef>(2).apply {
-            put(0, zero) // First index: the global variable itself
-            put(1, zero) // Second index: the first element of the array
+            put(0, zero)
+            put(1, zero)
         }
 
-        // Build the GEP to obtain i8* from [N x i8]
         val gepFormatStr = LLVMBuildGEP2(
             builder,
-            LLVMInt8TypeInContext(context), // Element type: i8
+            LLVMInt8TypeInContext(context),
             formatStr,
             indices,
             2,
@@ -222,40 +255,33 @@ class CodeGenerator() {
         buildPrintfCall(printfFunc, gepFormatStr, exprValue)
     }
 
-
     private fun visit(stmt: Stmt.IfStmt) {
         if (inferExprType(stmt.condition) != Type.BOOL) {
             fail(stmt.condition.location, "If condition must be Bool.")
         }
         val condValue = visit(stmt.condition)
 
-        // Get the current block and its parent function
         val currentBlock = LLVMGetInsertBlock(builder)
         val parentFunction = LLVMGetBasicBlockParent(currentBlock)
 
-        // Create basic blocks for then, else, and merge
         val thenBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "then")
         val elseBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "else")
         val mergeBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "merge")
 
-        // Build conditional branch
         LLVMBuildCondBr(builder, condValue, thenBlock, elseBlock)
 
-        // Then block
         LLVMPositionBuilderAtEnd(builder, thenBlock)
         stmt.thenBranch.forEach { visit(it) }
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
             LLVMBuildBr(builder, mergeBlock)
         }
 
-        // Else block
         LLVMPositionBuilderAtEnd(builder, elseBlock)
         stmt.elseBranch?.forEach { visit(it) }
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
             LLVMBuildBr(builder, mergeBlock)
         }
 
-        // Merge block
         LLVMPositionBuilderAtEnd(builder, mergeBlock)
     }
 
@@ -266,21 +292,17 @@ class CodeGenerator() {
             fail(stmt.condition.location, "While condition must be Bool.")
         }
 
-        // Create basic blocks for while loop
         val condBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_cond")
         val bodyBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_body")
         val afterBlock = LLVMAppendBasicBlockInContext(context, parentFunction, "while_after")
 
-        // Branch to condition block
         LLVMBuildBr(builder, condBlock)
 
-        // Condition block
         LLVMPositionBuilderAtEnd(builder, condBlock)
         val condValue = visit(stmt.condition)
 
         LLVMBuildCondBr(builder, condValue, bodyBlock, afterBlock)
 
-        // Body block
         LLVMPositionBuilderAtEnd(builder, bodyBlock)
         loopTargets.add(LoopTarget(continueBlock = condBlock, breakBlock = afterBlock))
         try {
@@ -289,10 +311,9 @@ class CodeGenerator() {
             loopTargets.removeAt(loopTargets.size - 1)
         }
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-            LLVMBuildBr(builder, condBlock)  // Loop back to condition
+            LLVMBuildBr(builder, condBlock)
         }
 
-        // After block
         LLVMPositionBuilderAtEnd(builder, afterBlock)
     }
 
@@ -362,22 +383,20 @@ class CodeGenerator() {
                 throw Exception("Void function should not return a value.")
             }
             LLVMBuildRetVoid(builder)
-        } else {
-            if (returnValue == null) {
-                throw Exception("Non-void function must return a value.")
-            }
-            LLVMBuildRet(builder, returnValue)
+            return
         }
+
+        if (returnValue == null) {
+            throw Exception("Non-void function must return a value.")
+        }
+        LLVMBuildRet(builder, returnValue)
     }
 
     private fun visit(stmt: Stmt.ExprStmt) {
         when (val expr = stmt.expr) {
-            is Expr.Call -> {
-                buildCall(expr, allowVoid = true)
-            }
-            else -> {
-                visit(expr)
-            }
+            is Expr.Call -> buildCall(expr, allowVoid = true)
+            is Expr.MemberCall -> buildMemberCall(expr, allowVoid = true)
+            else -> visit(expr)
         }
     }
 
@@ -526,20 +545,50 @@ class CodeGenerator() {
             is Expr.FloatLiteral -> Type.FLOAT
             is Expr.BoolLiteral -> Type.BOOL
             is Expr.StringLiteral -> Type.STRING
+            is Expr.This -> {
+                val className = currentClassName
+                    ?: throw Exception("'this' is only available inside class methods.")
+                Type.CLASS(className)
+            }
+
             is Expr.Variable -> codegenSymbolTable[expr.name]?.type
                 ?: throw Exception("Undefined variable during type inference: ${expr.name}")
+
             is Expr.UnaryOp -> when (expr.operator) {
                 "!" -> Type.BOOL
                 else -> throw Exception("Unknown unary operator: ${expr.operator}")
             }
+
             is Expr.Call -> {
                 if (expr.name == "len") {
                     Type.INT
                 } else {
+                    classes[expr.name]?.let { return Type.CLASS(expr.name) }
                     functions[expr.name]?.returnType
                         ?: throw Exception("Undefined function during type inference: ${expr.name}")
                 }
             }
+
+            is Expr.MemberAccess -> {
+                val receiverType = inferExprType(expr.receiver)
+                val className = (receiverType as? Type.CLASS)?.name
+                    ?: throw Exception("Member access requires class instance receiver.")
+                val classInfo = classes[className]
+                    ?: throw Exception("Unknown class '$className'.")
+                classInfo.fieldsByName[expr.member]?.type
+                    ?: throw Exception("Class '$className' has no field '${expr.member}'.")
+            }
+
+            is Expr.MemberCall -> {
+                val receiverType = inferExprType(expr.receiver)
+                val className = (receiverType as? Type.CLASS)?.name
+                    ?: throw Exception("Method call requires class instance receiver.")
+                val classInfo = classes[className]
+                    ?: throw Exception("Unknown class '$className'.")
+                classInfo.methods[expr.method]?.returnType
+                    ?: throw Exception("Class '$className' has no method '${expr.method}'.")
+            }
+
             is Expr.ListLiteral -> Type.LIST
             is Expr.Index -> Type.INT
             is Expr.BinaryOp -> when (expr.operator) {
@@ -549,6 +598,7 @@ class CodeGenerator() {
                     val rightType = inferExprType(expr.right)
                     if (leftType == Type.FLOAT || rightType == Type.FLOAT) Type.FLOAT else Type.INT
                 }
+
                 "%" -> Type.INT
                 else -> Type.INT
             }
@@ -561,31 +611,40 @@ class CodeGenerator() {
             is Expr.FloatLiteral -> LLVMConstReal(LLVMFloatTypeInContext(context), expr.value.toDouble())
             is Expr.BoolLiteral -> LLVMConstInt(LLVMInt1TypeInContext(context), if (expr.value) 1 else 0, 0)
             is Expr.StringLiteral -> LLVMBuildGlobalStringPtr(builder, expr.value, "str")
+            is Expr.This -> {
+                val symbol = codegenSymbolTable["this"]
+                    ?: throw Exception("'this' is only available inside class methods.")
+                LLVMBuildLoad2(builder, llvmTypeFor(symbol.type), symbol.ptr, "this")
+            }
+
             is Expr.Variable -> {
                 val symbol = codegenSymbolTable[expr.name]
                     ?: throw Exception("Undefined variable during code generation: ${expr.name}")
                 LLVMBuildLoad2(builder, llvmTypeFor(symbol.type), symbol.ptr, expr.name)
             }
+
             is Expr.UnaryOp -> {
                 val operand = visit(expr.operand)
                 when (expr.operator) {
                     "!" -> {
-                        // Type check: must be Bool
                         val operandType = inferExprType(expr.operand)
                         if (operandType != Type.BOOL) {
                             throw Exception("NOT operator requires Bool operand.")
                         }
                         LLVMBuildNot(builder, operand, "nottmp")
                     }
+
                     else -> throw Exception("Unknown unary operator: ${expr.operator}")
                 }
             }
+
             is Expr.Call -> buildCall(expr, allowVoid = false)
+            is Expr.MemberAccess -> buildMemberAccess(expr)
+            is Expr.MemberCall -> buildMemberCall(expr, allowVoid = false)
             is Expr.ListLiteral -> buildListLiteral(expr)
             is Expr.Index -> buildIndexExpr(expr)
 
             is Expr.BinaryOp -> {
-                // Special handling for short-circuit operators
                 if (expr.operator == "&&" || expr.operator == "||") {
                     return buildShortCircuitLogical(expr)
                 }
@@ -595,7 +654,6 @@ class CodeGenerator() {
                 val leftType = inferExprType(expr.left)
                 val rightType = inferExprType(expr.right)
 
-                // Type promotion: if mixed Int/Float, promote Int to Float
                 if (leftType == Type.INT && rightType == Type.FLOAT) {
                     left = LLVMBuildSIToFP(builder, left, LLVMFloatTypeInContext(context), "inttofloat")
                 } else if (leftType == Type.FLOAT && rightType == Type.INT) {
@@ -606,37 +664,60 @@ class CodeGenerator() {
 
                 when (expr.operator) {
                     "+" -> if (isFloat) LLVMBuildFAdd(builder, left, right, "faddtmp")
-                           else LLVMBuildAdd(builder, left, right, "addtmp")
+                    else LLVMBuildAdd(builder, left, right, "addtmp")
+
                     "-" -> if (isFloat) LLVMBuildFSub(builder, left, right, "fsubtmp")
-                           else LLVMBuildSub(builder, left, right, "subtmp")
+                    else LLVMBuildSub(builder, left, right, "subtmp")
+
                     "*" -> if (isFloat) LLVMBuildFMul(builder, left, right, "fmultmp")
-                           else LLVMBuildMul(builder, left, right, "multmp")
+                    else LLVMBuildMul(builder, left, right, "multmp")
+
                     "/" -> if (isFloat) LLVMBuildFDiv(builder, left, right, "fdivtmp")
-                           else LLVMBuildSDiv(builder, left, right, "divtmp")
+                    else LLVMBuildSDiv(builder, left, right, "divtmp")
+
                     "%" -> LLVMBuildSRem(builder, left, right, "modtmp")
                     ">" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOGT, left, right, "fcmptmp")
-                           else LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntSGT, left, right, "cmptmp")
+
                     "<" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOLT, left, right, "fcmptmp")
-                           else LLVMBuildICmp(builder, LLVMIntSLT, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntSLT, left, right, "cmptmp")
+
                     ">=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOGE, left, right, "fcmptmp")
-                            else LLVMBuildICmp(builder, LLVMIntSGE, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntSGE, left, right, "cmptmp")
+
                     "<=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOLE, left, right, "fcmptmp")
-                            else LLVMBuildICmp(builder, LLVMIntSLE, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntSLE, left, right, "cmptmp")
+
                     "==" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealOEQ, left, right, "fcmptmp")
-                            else LLVMBuildICmp(builder, LLVMIntEQ, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntEQ, left, right, "cmptmp")
+
                     "!=" -> if (isFloat) LLVMBuildFCmp(builder, LLVMRealONE, left, right, "fcmptmp")
-                            else LLVMBuildICmp(builder, LLVMIntNE, left, right, "cmptmp")
+                    else LLVMBuildICmp(builder, LLVMIntNE, left, right, "cmptmp")
+
                     else -> throw Exception("Unknown operator: ${expr.operator}")
                 }
             }
         }
     }
 
+    private fun buildMemberAccess(expr: Expr.MemberAccess): LLVMValueRef {
+        val receiverType = inferExprType(expr.receiver)
+        val classType = receiverType as? Type.CLASS
+            ?: throw Exception("Member access requires class instance receiver.")
+        val classInfo = classes[classType.name]
+            ?: throw Exception("Unknown class '${classType.name}'.")
+        val field = classInfo.fieldsByName[expr.member]
+            ?: throw Exception("Class '${classType.name}' has no field '${expr.member}'.")
+
+        val receiverValue = visit(expr.receiver)
+        val fieldPtr = LLVMBuildStructGEP2(builder, classInfo.structType, receiverValue, field.index, "${expr.member}_ptr")
+        return LLVMBuildLoad2(builder, llvmTypeFor(field.type), fieldPtr, expr.member)
+    }
+
     private fun buildShortCircuitLogical(expr: Expr.BinaryOp): LLVMValueRef {
         val currentBlock = LLVMGetInsertBlock(builder)
         val parentFunction = LLVMGetBasicBlockParent(currentBlock)
 
-        // Type check
         if (inferExprType(expr.left) != Type.BOOL || inferExprType(expr.right) != Type.BOOL) {
             throw Exception("Logical operators require Bool operands.")
         }
@@ -648,20 +729,16 @@ class CodeGenerator() {
         val leftEndBlock = LLVMGetInsertBlock(builder)
 
         if (expr.operator == "&&") {
-            // If left is false, skip right and return false
             LLVMBuildCondBr(builder, leftValue, rightBlock, mergeBlock)
-        } else {  // ||
-            // If left is true, skip right and return true
+        } else {
             LLVMBuildCondBr(builder, leftValue, mergeBlock, rightBlock)
         }
 
-        // Right block
         LLVMPositionBuilderAtEnd(builder, rightBlock)
         val rightValue = visit(expr.right)
         val rightEndBlock = LLVMGetInsertBlock(builder)
         LLVMBuildBr(builder, mergeBlock)
 
-        // Merge block with phi node
         LLVMPositionBuilderAtEnd(builder, mergeBlock)
         val phi = LLVMBuildPhi(builder, LLVMInt1TypeInContext(context), "logical_result")
 
@@ -669,17 +746,13 @@ class CodeGenerator() {
         val incomingBlocks = PointerPointer<LLVMBasicBlockRef>(2)
 
         if (expr.operator == "&&") {
-            // From left block: false
             incomingValues.put(0, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
             incomingBlocks.put(0, leftEndBlock)
-            // From right block: actual right value
             incomingValues.put(1, rightValue)
             incomingBlocks.put(1, rightEndBlock)
-        } else {  // ||
-            // From left block: true
+        } else {
             incomingValues.put(0, LLVMConstInt(LLVMInt1TypeInContext(context), 1, 0))
             incomingBlocks.put(0, leftEndBlock)
-            // From right block: actual right value
             incomingValues.put(1, rightValue)
             incomingBlocks.put(1, rightEndBlock)
         }
@@ -701,6 +774,11 @@ class CodeGenerator() {
                 else -> fail(expr.args[0].location, "len expects a List or String argument.")
             }
         }
+
+        classes[expr.name]?.let { classInfo ->
+            return buildClassConstructorCall(classInfo, expr)
+        }
+
         val info = functions[expr.name]
             ?: throw Exception("Undefined function during code generation: ${expr.name}")
 
@@ -722,9 +800,72 @@ class CodeGenerator() {
             info.llvmFunc,
             args,
             expr.args.size,
-            "calltmp"
+            if (info.returnType == Type.VOID) "" else "calltmp"
         ) ?: throw Exception("Failed to build call for function '${expr.name}'.")
         return callValue
+    }
+
+    private fun buildMemberCall(expr: Expr.MemberCall, allowVoid: Boolean): LLVMValueRef {
+        val receiverType = inferExprType(expr.receiver)
+        val classType = receiverType as? Type.CLASS
+            ?: throw Exception("Method call requires class instance receiver.")
+        val classInfo = classes[classType.name]
+            ?: throw Exception("Unknown class '${classType.name}'.")
+        val methodInfo = classInfo.methods[expr.method]
+            ?: throw Exception("Class '${classType.name}' has no method '${expr.method}'.")
+
+        if (expr.args.size != methodInfo.paramTypes.size) {
+            throw Exception("Method '${expr.method}' expects ${methodInfo.paramTypes.size} arguments, got ${expr.args.size}.")
+        }
+        if (!allowVoid && methodInfo.returnType == Type.VOID) {
+            throw Exception("Cannot use void method '${expr.method}' in an expression.")
+        }
+
+        val args = PointerPointer<LLVMValueRef>((expr.args.size + 1).toLong())
+        args.put(0L, visit(expr.receiver))
+        expr.args.forEachIndexed { index, arg ->
+            args.put((index + 1).toLong(), visit(arg))
+        }
+
+        val callValue = LLVMBuildCall2(
+            builder,
+            methodInfo.llvmType,
+            methodInfo.llvmFunc,
+            args,
+            expr.args.size + 1,
+            if (methodInfo.returnType == Type.VOID) "" else "method_call"
+        ) ?: throw Exception("Failed to build call for method '${expr.method}'.")
+
+        return callValue
+    }
+
+    private fun buildClassConstructorCall(classInfo: ClassInfo, expr: Expr.Call): LLVMValueRef {
+        if (expr.args.size != classInfo.fields.size) {
+            fail(expr.location, "Constructor '${classInfo.name}' expects ${classInfo.fields.size} arguments, got ${expr.args.size}.")
+        }
+
+        val mallocFn = LLVMGetNamedFunction(module, "malloc") ?: declareMalloc()
+        val sizeValue = LLVMSizeOf(classInfo.structType)
+        val mallocArgs = PointerPointer<LLVMValueRef>(1).apply { put(0, sizeValue) }
+        val rawPtr = LLVMBuildCall2(
+            builder,
+            mallocFuncType,
+            mallocFn,
+            mallocArgs,
+            1,
+            "malloc_obj"
+        ) ?: throw Exception("Failed to build call to malloc.")
+
+        val objPtrType = LLVMPointerType(classInfo.structType, 0)
+        val objPtr = LLVMBuildBitCast(builder, rawPtr, objPtrType, "obj_ptr")
+
+        classInfo.fields.forEachIndexed { index, field ->
+            val fieldPtr = LLVMBuildStructGEP2(builder, classInfo.structType, objPtr, index, "${field.name}_ptr")
+            val value = visit(expr.args[index])
+            LLVMBuildStore(builder, value, fieldPtr)
+        }
+
+        return objPtr
     }
 
     private fun buildListLength(listPtr: LLVMValueRef): LLVMValueRef {
@@ -771,6 +912,86 @@ class CodeGenerator() {
         return LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), elemPtr, "list_elem")
     }
 
+    private fun declareClassTypes(classDefs: List<Stmt.ClassDef>) {
+        classDefs.forEach { classDef ->
+            if (classStructTypes.containsKey(classDef.name)) {
+                throw Exception("Class '${classDef.name}' already declared.")
+            }
+            classStructTypes[classDef.name] = LLVMStructCreateNamed(context, "Class_${classDef.name}")
+        }
+
+        classDefs.forEach { classDef ->
+            val structType = classStructTypes[classDef.name]
+                ?: throw Exception("Missing struct type for class '${classDef.name}'.")
+
+            val fieldInfos = classDef.fields.mapIndexed { index, field ->
+                ClassFieldInfo(field.name, field.type, field.mutable, index)
+            }
+
+            val fieldTypesPtr = if (fieldInfos.isEmpty()) {
+                PointerPointer<LLVMTypeRef>(0)
+            } else {
+                PointerPointer<LLVMTypeRef>(fieldInfos.size.toLong()).also { ptr ->
+                    fieldInfos.forEachIndexed { index, field ->
+                        ptr.put(index.toLong(), llvmTypeFor(field.type))
+                    }
+                }
+            }
+
+            LLVMStructSetBody(structType, fieldTypesPtr, fieldInfos.size, 0)
+
+            val fieldsByName = fieldInfos.associateBy { it.name }
+            classes[classDef.name] = ClassInfo(
+                name = classDef.name,
+                structType = structType,
+                fields = fieldInfos,
+                fieldsByName = fieldsByName,
+                methods = mutableMapOf(),
+                methodsAst = mutableMapOf()
+            )
+        }
+    }
+
+    private fun declareMethod(className: String, method: MethodDef) {
+        val classInfo = classes[className]
+            ?: throw Exception("Unknown class '$className'.")
+        if (classInfo.methods.containsKey(method.name)) {
+            throw Exception("Method '$className.${method.name}' already declared.")
+        }
+
+        val returnType = llvmTypeFor(method.returnType)
+        val paramTypes = mutableListOf<Type>()
+        paramTypes.add(Type.CLASS(className))
+        paramTypes.addAll(method.params.map { it.type })
+
+        val llvmParamTypes = if (paramTypes.isEmpty()) {
+            PointerPointer<LLVMTypeRef>(0)
+        } else {
+            PointerPointer<LLVMTypeRef>(paramTypes.size.toLong()).also { ptr ->
+                paramTypes.forEachIndexed { index, type ->
+                    ptr.put(index.toLong(), llvmTypeFor(type))
+                }
+            }
+        }
+
+        val fnType = LLVMFunctionType(returnType, llvmParamTypes, paramTypes.size, 0)
+        val mangledName = "${className}__${method.name}"
+        val fn = LLVMAddFunction(module, mangledName, fnType)
+
+        val info = FunctionInfo(
+            name = mangledName,
+            returnType = method.returnType,
+            paramTypes = method.params.map { it.type },
+            llvmFunc = fn,
+            llvmType = fnType,
+            ownerClass = className
+        )
+
+        classInfo.methods[method.name] = info
+        classInfo.methodsAst[method.name] = method
+        functions[mangledName] = info
+    }
+
     private fun declareFunction(stmt: Stmt.FunctionDef) {
         if (functions.containsKey(stmt.name)) {
             throw Exception("Function '${stmt.name}' already declared.")
@@ -778,8 +999,8 @@ class CodeGenerator() {
         if (stmt.name == "len") {
             throw Exception("Cannot redefine built-in function 'len'.")
         }
-        if (stmt.returnType == Type.LIST) {
-            throw Exception("List return types are not supported in LLVM codegen yet.")
+        if (classes.containsKey(stmt.name)) {
+            throw Exception("Function '${stmt.name}' conflicts with class '${stmt.name}'.")
         }
 
         val returnType = llvmTypeFor(stmt.returnType)
@@ -788,17 +1009,12 @@ class CodeGenerator() {
         val paramPointer = if (paramTypes.isEmpty()) {
             PointerPointer<LLVMTypeRef>(0)
         } else {
-            val paramsPtr = PointerPointer<LLVMTypeRef>(paramTypes.size.toLong())
-            paramTypes.forEachIndexed { index, llvmType -> paramsPtr.put(index.toLong(), llvmType) }
-            paramsPtr
+            PointerPointer<LLVMTypeRef>(paramTypes.size.toLong()).also { paramsPtr ->
+                paramTypes.forEachIndexed { index, llvmType -> paramsPtr.put(index.toLong(), llvmType) }
+            }
         }
 
-        val fnType = LLVMFunctionType(
-            returnType,
-            paramPointer,
-            paramTypes.size,
-            0
-        )
+        val fnType = LLVMFunctionType(returnType, paramPointer, paramTypes.size, 0)
         val fn = LLVMAddFunction(module, stmt.name, fnType)
         functions[stmt.name] = FunctionInfo(
             name = stmt.name,
@@ -809,6 +1025,51 @@ class CodeGenerator() {
         )
     }
 
+    private fun generateMethodBody(className: String, method: MethodDef) {
+        val classInfo = classes[className]
+            ?: throw Exception("Unknown class '$className'.")
+        val info = classInfo.methods[method.name]
+            ?: throw Exception("Missing method info for '$className.${method.name}'.")
+
+        val entry = LLVMAppendBasicBlockInContext(context, info.llvmFunc, "entry")
+        LLVMPositionBuilderAtEnd(builder, entry)
+
+        val previousReturnType = currentFunctionReturnType
+        currentFunctionReturnType = method.returnType
+
+        val previousClassName = currentClassName
+        currentClassName = className
+
+        val previousSymbols = codegenSymbolTable
+        codegenSymbolTable = mutableMapOf()
+
+        val selfValue = LLVMGetParam(info.llvmFunc, 0)
+        val selfPtr = LLVMBuildAlloca(builder, llvmTypeFor(Type.CLASS(className)), "this")
+        LLVMBuildStore(builder, selfValue, selfPtr)
+        codegenSymbolTable["this"] = SymbolInfo(Type.CLASS(className), selfPtr, immutable = true)
+
+        method.params.forEachIndexed { index, param ->
+            val paramValue = LLVMGetParam(info.llvmFunc, index + 1)
+            val paramPtr = LLVMBuildAlloca(builder, llvmTypeFor(param.type), param.name)
+            LLVMBuildStore(builder, paramValue, paramPtr)
+            codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr, immutable = false)
+        }
+
+        method.body.forEach { statement ->
+            if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+                visit(statement)
+            }
+        }
+
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
+            buildDefaultReturn(method.returnType)
+        }
+
+        currentFunctionReturnType = previousReturnType
+        currentClassName = previousClassName
+        codegenSymbolTable = previousSymbols
+    }
+
     private fun generateFunctionBody(stmt: Stmt.FunctionDef) {
         val info = functions[stmt.name] ?: throw Exception("Missing function info for '${stmt.name}'.")
         val entry = LLVMAppendBasicBlockInContext(context, info.llvmFunc, "entry")
@@ -817,15 +1078,17 @@ class CodeGenerator() {
         val previousReturnType = currentFunctionReturnType
         currentFunctionReturnType = stmt.returnType
 
+        val previousClassName = currentClassName
+        currentClassName = null
+
         val previousSymbols = codegenSymbolTable
         codegenSymbolTable = mutableMapOf()
 
-        // Map parameters to allocas for local variable access
         stmt.params.forEachIndexed { index, param ->
             val paramValue = LLVMGetParam(info.llvmFunc, index)
             val paramPtr = LLVMBuildAlloca(builder, llvmTypeFor(param.type), param.name)
             LLVMBuildStore(builder, paramValue, paramPtr)
-            codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr)
+            codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr, immutable = false)
         }
 
         stmt.body.forEach { statement ->
@@ -835,18 +1098,28 @@ class CodeGenerator() {
         }
 
         if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-            when (stmt.returnType) {
-                Type.VOID -> LLVMBuildRetVoid(builder)
-                Type.INT -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
-                Type.FLOAT -> LLVMBuildRet(builder, LLVMConstReal(LLVMFloatTypeInContext(context), 0.0))
-                Type.BOOL -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
-                Type.STRING -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(context), 0)))
-                Type.LIST -> throw Exception("List return type is not supported in LLVM codegen yet.")
-            }
+            buildDefaultReturn(stmt.returnType)
         }
 
         currentFunctionReturnType = previousReturnType
+        currentClassName = previousClassName
         codegenSymbolTable = previousSymbols
+    }
+
+    private fun buildDefaultReturn(type: Type) {
+        when (type) {
+            Type.VOID -> LLVMBuildRetVoid(builder)
+            Type.INT -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
+            Type.FLOAT -> LLVMBuildRet(builder, LLVMConstReal(LLVMFloatTypeInContext(context), 0.0))
+            Type.BOOL -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
+            Type.STRING -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(context), 0)))
+            Type.LIST -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(listStructType, 0)))
+            is Type.CLASS -> {
+                val structType = classStructTypes[type.name]
+                    ?: throw Exception("Unknown class '${type.name}'.")
+                LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(structType, 0)))
+            }
+        }
     }
 
     private fun llvmTypeFor(type: Type): LLVMTypeRef {
@@ -857,27 +1130,28 @@ class CodeGenerator() {
             Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
             Type.LIST -> LLVMPointerType(listStructType, 0)
             Type.VOID -> LLVMVoidTypeInContext(context)
+            is Type.CLASS -> {
+                val structType = classStructTypes[type.name]
+                    ?: throw Exception("Unknown class '${type.name}'.")
+                LLVMPointerType(structType, 0)
+            }
         }
     }
 
     private fun declarePrintf(): LLVMValueRef {
-        // Define the printf function signature: i32 (i8*, ...)
         val printfReturnType = LLVMInt32TypeInContext(context)
-        val printfParamType = LLVMPointerType(LLVMInt8TypeInContext(context), 0) // i8*
+        val printfParamType = LLVMPointerType(LLVMInt8TypeInContext(context), 0)
 
-        // Create a PointerPointer for the parameter types (only the first non-variadic parameter)
         val printfParamTypes = PointerPointer<LLVMTypeRef>(1)
         printfParamTypes.put(0, printfParamType)
 
-        // Define the function type: i32 (i8*, ...)
         printfFuncType = LLVMFunctionType(
-            printfReturnType, // Return type: i32
-            printfParamTypes, // Parameter types: [i8*]
-            1,                // Number of parameters
-            1                 // Is variadic: true (1)
+            printfReturnType,
+            printfParamTypes,
+            1,
+            1
         )
 
-        // Add the printf function to the module
         return LLVMAddFunction(module, "printf", printfFuncType)
     }
 
@@ -885,29 +1159,35 @@ class CodeGenerator() {
         return LLVMAddFunction(module, "strlen", strlenFuncType)
     }
 
+    private fun declareMalloc(): LLVMValueRef {
+        val mallocParamTypes = PointerPointer<LLVMTypeRef>(1)
+        mallocParamTypes.put(0, LLVMInt64TypeInContext(context))
+        mallocFuncType = LLVMFunctionType(
+            LLVMPointerType(LLVMInt8TypeInContext(context), 0),
+            mallocParamTypes,
+            1,
+            0
+        )
+        return LLVMAddFunction(module, "malloc", mallocFuncType)
+    }
 
     private fun declareFormatStrings() {
-        // Helper function to create a global string as a constant array of i8
         fun createGlobalString(name: String, value: String): LLVMValueRef {
             val strLength = value.length
-            val arrayType = LLVMArrayType(LLVMInt8TypeInContext(context), strLength + 1) // +1 for null terminator
+            val arrayType = LLVMArrayType(LLVMInt8TypeInContext(context), strLength + 1)
             val global = LLVMAddGlobal(module, arrayType, name)
             LLVMSetLinkage(global, LLVMPrivateLinkage)
-            // LLVMConstString creates a [N x i8] constant without the null terminator (since the array type includes it)
             val initializer = LLVMConstStringInContext(context, value, strLength, 0)
             LLVMSetInitializer(global, initializer)
-            LLVMSetGlobalConstant(global, 1) // Mark as constant
+            LLVMSetGlobalConstant(global, 1)
             return global
         }
 
-        // Declare format strings for different types
         formatStrings[Type.INT] = createGlobalString("fmt_int", "%d\n")
         formatStrings[Type.STRING] = createGlobalString("fmt_str", "%s\n")
         formatStrings[Type.FLOAT] = createGlobalString("fmt_float", "%f\n")
         formatStrings[Type.BOOL] = createGlobalString("fmt_bool", "%d\n")
-        // Add more format strings here if needed
     }
-
 
     fun printIR() {
         val ir = LLVMPrintModuleToString(module)

@@ -13,6 +13,7 @@ Complete syntax guide for the Slang programming language.
 - [Control Flow](#control-flow)
 - [Logical Operators](#logical-operators)
 - [Functions](#functions)
+- [Classes](#classes)
 - [Lists](#lists)
 - [Built-in Functions](#built-in-functions)
 
@@ -438,6 +439,60 @@ greet("Alice");
 
 ---
 
+## Classes
+
+Slang supports class-lite object-oriented programming with constructor fields, instance methods, and `this`.
+
+### Class Definition
+
+```slang
+class Point(var x: Int, var y: Int) {
+    fn move(dx: Int, dy: Int): Void {
+        this.x = this.x + dx;
+        this.y = this.y + dy;
+        return;
+    }
+}
+```
+
+### Construction
+
+```slang
+let p: Point = Point(1, 2);
+```
+
+### Field Access and Assignment
+
+```slang
+print(p.x);   // field read
+p.x = 10;     // field write (allowed only for `var` fields)
+```
+
+### Method Calls and `this`
+
+```slang
+class Counter(var value: Int) {
+    fn add(delta: Int): Void {
+        this.value = this.value + delta;
+        return;
+    }
+}
+
+let c: Counter = Counter(1);
+c.add(4);
+print(c.value);  // 5
+```
+
+### Class Rules (v1)
+- No inheritance
+- No interfaces
+- No generics
+- No method overloading
+- Class instances are reference types
+- Printing class instances directly is not supported in v1
+
+---
+
 ## Lists
 
 ### List Literals
@@ -588,6 +643,7 @@ print(sum);  // 30
 | `String` | Text string | `"hello"`, `"world\n"` |
 | `List` | List of integers | `[1, 2, 3]` |
 | `Void` | No value (functions only) | N/A |
+| `<ClassName>` | User-defined class instance type | `Point`, `Counter` |
 
 ### Type Coercion Rules
 
@@ -781,6 +837,8 @@ while (i < len(list) && !found) {
 - String concatenation: interpreter only (LLVM codegen pending)
 - No string manipulation functions yet
 - No type inference (explicit types required)
+- No inheritance or interfaces
+- No direct `print(obj)` for class instances in v1
 
 ### Interpreter vs LLVM Differences
 - **Interpreter:** Full string concatenation support
@@ -798,9 +856,10 @@ while (i < len(list) && !found) {
   - `features_demo.slang` - Core features
   - `logical_operators_demo.slang` - Logical operators
   - `loops_demo.slang` - While loop examples
+  - `class_demo.slang` - Classes and methods
 
 ---
 
-**Last Updated:** February 22, 2026
-**Version:** 1.0
+**Last Updated:** March 2, 2026
+**Version:** 1.1
 **Slang Language Specification**
