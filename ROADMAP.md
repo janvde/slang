@@ -6,17 +6,17 @@ Last updated: 2026-03-04
 - Parser, type checker, interpreter, and LLVM codegen are in place.
 - Core language works: variables, control flow, functions, classes (no inheritance), lists, `len`.
 - Test suite is green (`./gradlew test`).
-- Main known gap: string concatenation works in interpreter but not in LLVM/native mode.
+- String concatenation parity is in place for `String + String` across interpreter and LLVM/native modes.
 
 ## Prioritized Roadmap
 
-## 1) Close Interpreter/Native Parity for Strings (P0)
+## 1) Close Interpreter/Native Parity for Strings (P0) - Completed in 1.2 (2026-03-04)
 Goal: make string behavior identical between interpreter and LLVM output.
 
 Scope:
-- Implement LLVM codegen for `String + String`.
-- Support mixed concatenation with non-strings by explicit conversion helpers (or fail with clear type errors if deferred).
-- Ensure concatenated strings can be printed and passed through functions/methods.
+- [x] Implement LLVM codegen for `String + String`.
+- [x] Support mixed concatenation with non-strings by explicit conversion helpers (or fail with clear type errors if deferred).
+- [x] Ensure concatenated strings can be printed and passed through functions/methods.
 
 Implementation areas:
 - [src/main/kotlin/codegen/CodeGenerator.kt](/Users/jan/Projects/slang/src/main/kotlin/codegen/CodeGenerator.kt)
@@ -25,9 +25,9 @@ Implementation areas:
 - [src/test/kotlin/nl/endevelopment/CompilerTest.kt](/Users/jan/Projects/slang/src/test/kotlin/nl/endevelopment/CompilerTest.kt)
 
 Definition of done:
-- Native run of `print("a" + "b");` outputs `ab`.
-- At least 6 new tests for string concat paths (literal+literal, var+literal, expression nesting, function return, class field usage, failure cases).
-- Docs updated to remove current limitation note.
+- [x] Native run of `print("a" + "b");` outputs `ab`.
+- [x] At least 6 new tests for string concat paths (literal+literal, var+literal, expression nesting, function return, class field usage, failure cases).
+- [x] Docs updated to remove current limitation note.
 
 ## 2) Typed Lists and Safer Collection Semantics (P1)
 Goal: move from Int-only list assumptions to typed lists that scale with the language.
@@ -204,7 +204,7 @@ Definition of done:
 - Design leaves a clear migration path for future runtime improvements.
 
 ## Suggested Delivery Plan
-1. Release 1.2: Item 1 (String parity), test/docs cleanup.
+1. Release 1.2 (completed on 2026-03-04): Item 1 (String parity), test/docs cleanup.
 2. Release 1.3: Items 2, 4, and 5 (typed lists + diagnostics + stdlib v1).
 3. Release 1.4: Items 3 and 6 (list mutation + for-each loops).
 4. Release 1.5: Items 7 and 8 (local inference + modules/imports).

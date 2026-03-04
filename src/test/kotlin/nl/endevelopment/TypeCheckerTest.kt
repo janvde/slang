@@ -83,4 +83,16 @@ class TypeCheckerTest {
         }
         assertTrue(error.message?.contains("'this' is only allowed") == true)
     }
+
+    @Test
+    fun testStringConcatMixedTypesFails() {
+        val source = """
+            let message: String = "hello" + 42;
+        """.trimIndent()
+
+        val error = assertFailsWith<RuntimeException> {
+            typeCheck(source)
+        }
+        assertTrue(error.message?.contains("Unsupported operand types for '+': STRING and INT.") == true)
+    }
 }

@@ -20,6 +20,10 @@ class CompilerTest {
         }
     }
 
+    private fun hasPrintedLine(output: String, value: String): Boolean {
+        return output.lineSequence().map { it.trim() }.any { it == value }
+    }
+
     @Test
     fun testCompileSimpleProgram() {
         val source = """
@@ -456,6 +460,147 @@ class CompilerTest {
             val ir = tempOutput.readText()
             assertTrue(ir.contains("@Counter__add"))
             assertTrue(ir.contains("%Class_Counter = type { i32 }"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatLiteralPlusLiteralCompiles() {
+        val source = """print("a" + "b");"""
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "ab"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("declare ptr @strcpy"))
+            assertTrue(ir.contains("declare ptr @strcat"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatVarPlusLiteralCompiles() {
+        val source = """
+            let prefix: String = "a";
+            print(prefix + "b");
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "ab"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("call ptr @strcat"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatNestedExpressionCompiles() {
+        val source = """
+            let a: String = "A";
+            let b: String = "B";
+            print(("x" + a) + (b + "y"));
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "xABy"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("call i64 @strlen"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatFromFunctionReturnCompiles() {
+        val source = """
+            fn join(a: String, b: String): String {
+                return a + b;
+            }
+            print(join("left", "right"));
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "leftright"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("define ptr @join"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatWithClassFieldCompiles() {
+        val source = """
+            class Greeter(var prefix: String) {
+                fn greet(name: String): String {
+                    return this.prefix + name;
+                }
+            }
+
+            let g: Greeter = Greeter("hi ");
+            print(g.greet("bob"));
+            print(g.prefix + "!");
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "hi bob"))
+            assertTrue(hasPrintedLine(output, "hi !"))
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("@Greeter__greet"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testStringConcatMixedTypesFailsWithClearTypeError() {
+        val source = """
+            let bad: String = "a" + 1;
+            print(bad);
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(output.contains("Compilation Error"))
+            assertTrue(output.contains("Unsupported operand types for '+': STRING and INT."))
+            assertFalse(output.contains("Code Generation Complete"))
         } finally {
             tempOutput.delete()
         }

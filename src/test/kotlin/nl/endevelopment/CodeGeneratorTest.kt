@@ -332,4 +332,16 @@ class CodeGeneratorTest {
         assertTrue(ir.contains("@Counter__add"))
         assertTrue(ir.contains("call void @Counter__add"))
     }
+
+    @Test
+    fun testStringConcatGeneratesRuntimeCalls() {
+        val source = """print("a" + "b");"""
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("declare i64 @strlen"))
+        assertTrue(ir.contains("declare ptr @malloc(i64)"))
+        assertTrue(ir.contains("declare ptr @strcpy(ptr, ptr)"))
+        assertTrue(ir.contains("declare ptr @strcat(ptr, ptr)"))
+        assertTrue(ir.contains("call ptr @strcat"))
+    }
 }

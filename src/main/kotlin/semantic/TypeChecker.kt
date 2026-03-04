@@ -330,6 +330,7 @@ class TypeChecker {
                 val rightType = inferExprType(expr.right)
                 when (expr.operator) {
                     "+" -> when {
+                        leftType == Type.STRING && rightType == Type.STRING -> Type.STRING
                         leftType == Type.INT && rightType == Type.INT -> Type.INT
                         isNumeric(leftType) && isNumeric(rightType) -> Type.FLOAT
                         else -> fail(expr.location, "Unsupported operand types for '+': $leftType and $rightType.")

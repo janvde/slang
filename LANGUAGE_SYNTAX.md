@@ -157,7 +157,7 @@ let message: String = greeting + " " + name;
 print(message);  // "Hello Alice"
 ```
 
-**Note:** String concatenation with `+` operator works in the interpreter but is not yet supported in LLVM code generation (native compilation). Basic string literals and all escape sequences are fully supported in both modes.
+**Note:** String concatenation currently supports `String + String` in both interpreter and LLVM/native modes. Mixed-type concatenation (for example `"x" + 1`) is a type error.
 
 ---
 
@@ -696,7 +696,7 @@ print(sum);  // 30
 ### String Operators
 | Operator | Description | Example | Support |
 |----------|-------------|---------|---------|
-| `+` | Concatenation | `"hi" + " there"` | Interpreter only |
+| `+` | Concatenation | `"hi" + " there"` | Interpreter + LLVM/Native (`String + String`) |
 
 ---
 
@@ -834,16 +834,15 @@ while (i < len(list) && !found) {
 
 ### Current Limitations
 - No arrays (only integer Lists)
-- String concatenation: interpreter only (LLVM codegen pending)
+- No mixed-type string concatenation (`String + Int`, etc.); use explicit conversion helpers once available
 - No string manipulation functions yet
 - No type inference (explicit types required)
 - No inheritance or interfaces
 - No direct `print(obj)` for class instances in v1
 
 ### Interpreter vs LLVM Differences
-- **Interpreter:** Full string concatenation support
-- **LLVM/Native:** String concatenation not yet implemented
-- All other features work identically in both modes
+- String concatenation (`String + String`) now works identically in both modes
+- All other currently implemented features work identically in both modes
 
 ---
 
