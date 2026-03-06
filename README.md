@@ -10,7 +10,7 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 - **Variable mutability**: `let` (immutable) and `var` (mutable) with reassignment support
 - **Arithmetic operations** (+, -, *, /, %) with operator precedence
 - **Type promotion**: Automatic Int→Float conversion in mixed operations
-- **String operations**: Concatenation with `+` operator (interpreter only)
+- **String operations**: Concatenation with `+` operator (`String + String` in interpreter and LLVM/native)
 - **Logical operators**: `!` (NOT), `&&` (AND), `||` (OR) with short-circuit evaluation
 - **Control flow** with if/else statements, while loops, and C-style for loops
 - **Loop control**: `break` and `continue`
@@ -422,7 +422,6 @@ sudo cp slangc slangc.py /usr/local/bin/
 - [ ] Optimization passes
 - [ ] More built-in functions
 - [ ] String manipulation functions
-- [ ] Full string concatenation in LLVM codegen
 - [ ] Module/import system
 
 ## Testing

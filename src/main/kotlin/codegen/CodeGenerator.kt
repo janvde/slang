@@ -15,16 +15,19 @@ class CodeGenerator {
     private val module: LLVMModuleRef = LLVMModuleCreateWithNameInContext("my_module", context)
     private val builder: LLVMBuilderRef = LLVMCreateBuilderInContext(context)
     private var codegenSymbolTable = mutableMapOf<String, SymbolInfo>()
+    private val charPtrType: LLVMTypeRef = LLVMPointerType(LLVMInt8TypeInContext(context), 0)
 
     private val formatStrings: MutableMap<Type, LLVMValueRef> = mutableMapOf()
 
     private lateinit var printfFuncType: LLVMTypeRef
     private val strlenFuncType: LLVMTypeRef = run {
         val paramTypes = PointerPointer<LLVMTypeRef>(1)
-        paramTypes.put(0, LLVMPointerType(LLVMInt8TypeInContext(context), 0))
+        paramTypes.put(0, charPtrType)
         LLVMFunctionType(LLVMInt64TypeInContext(context), paramTypes, 1, 0)
     }
     private lateinit var mallocFuncType: LLVMTypeRef
+    private lateinit var strcpyFuncType: LLVMTypeRef
+    private lateinit var strcatFuncType: LLVMTypeRef
 
     private val functions = mutableMapOf<String, FunctionInfo>()
     private val classStructTypes = mutableMapOf<String, LLVMTypeRef>()
@@ -593,10 +596,25 @@ class CodeGenerator {
             is Expr.Index -> Type.INT
             is Expr.BinaryOp -> when (expr.operator) {
                 ">", "<", ">=", "<=", "==", "!=", "&&", "||" -> Type.BOOL
-                "+", "-", "*", "/" -> {
+                "+" -> {
                     val leftType = inferExprType(expr.left)
                     val rightType = inferExprType(expr.right)
-                    if (leftType == Type.FLOAT || rightType == Type.FLOAT) Type.FLOAT else Type.INT
+                    when {
+                        leftType == Type.STRING && rightType == Type.STRING -> Type.STRING
+                        leftType == Type.INT && rightType == Type.INT -> Type.INT
+                        isNumeric(leftType) && isNumeric(rightType) -> Type.FLOAT
+                        else -> throw Exception("Unsupported operand types for '+': $leftType and $rightType.")
+                    }
+                }
+
+                "-", "*", "/" -> {
+                    val leftType = inferExprType(expr.left)
+                    val rightType = inferExprType(expr.right)
+                    when {
+                        leftType == Type.INT && rightType == Type.INT -> Type.INT
+                        isNumeric(leftType) && isNumeric(rightType) -> Type.FLOAT
+                        else -> throw Exception("Unsupported operand types for '${expr.operator}': $leftType and $rightType.")
+                    }
                 }
 
                 "%" -> Type.INT
@@ -653,6 +671,10 @@ class CodeGenerator {
                 var right = visit(expr.right)
                 val leftType = inferExprType(expr.left)
                 val rightType = inferExprType(expr.right)
+
+                if (expr.operator == "+" && leftType == Type.STRING && rightType == Type.STRING) {
+                    return buildStringConcat(left, right)
+                }
 
                 if (leftType == Type.INT && rightType == Type.FLOAT) {
                     left = LLVMBuildSIToFP(builder, left, LLVMFloatTypeInContext(context), "inttofloat")
@@ -886,6 +908,79 @@ class CodeGenerator {
             "strlen_call"
         ) ?: throw Exception("Failed to build call to strlen.")
         return LLVMBuildTrunc(builder, len64, LLVMInt32TypeInContext(context), "strlen_i32")
+    }
+
+    private fun buildStringConcat(left: LLVMValueRef, right: LLVMValueRef): LLVMValueRef {
+        val strlenFn = LLVMGetNamedFunction(module, "strlen") ?: declareStrlen()
+        val mallocFn = LLVMGetNamedFunction(module, "malloc") ?: declareMalloc()
+        val strcpyFn = LLVMGetNamedFunction(module, "strcpy") ?: declareStrcpy()
+        val strcatFn = LLVMGetNamedFunction(module, "strcat") ?: declareStrcat()
+
+        val lenLeftArgs = PointerPointer<LLVMValueRef>(1).apply { put(0, left) }
+        val lenLeft = LLVMBuildCall2(
+            builder,
+            strlenFuncType,
+            strlenFn,
+            lenLeftArgs,
+            1,
+            "left_len"
+        ) ?: throw Exception("Failed to build strlen call for left string.")
+
+        val lenRightArgs = PointerPointer<LLVMValueRef>(1).apply { put(0, right) }
+        val lenRight = LLVMBuildCall2(
+            builder,
+            strlenFuncType,
+            strlenFn,
+            lenRightArgs,
+            1,
+            "right_len"
+        ) ?: throw Exception("Failed to build strlen call for right string.")
+
+        val totalLen = LLVMBuildAdd(builder, lenLeft, lenRight, "concat_len")
+        val allocLen = LLVMBuildAdd(
+            builder,
+            totalLen,
+            LLVMConstInt(LLVMInt64TypeInContext(context), 1, 0),
+            "concat_alloc_len"
+        )
+
+        val mallocArgs = PointerPointer<LLVMValueRef>(1).apply { put(0, allocLen) }
+        val concatPtr = LLVMBuildCall2(
+            builder,
+            mallocFuncType,
+            mallocFn,
+            mallocArgs,
+            1,
+            "concat_buf"
+        ) ?: throw Exception("Failed to allocate memory for string concatenation.")
+
+        val copyArgs = PointerPointer<LLVMValueRef>(2).apply {
+            put(0, concatPtr)
+            put(1, left)
+        }
+        LLVMBuildCall2(
+            builder,
+            strcpyFuncType,
+            strcpyFn,
+            copyArgs,
+            2,
+            "strcpy_call"
+        ) ?: throw Exception("Failed to build strcpy call for string concatenation.")
+
+        val appendArgs = PointerPointer<LLVMValueRef>(2).apply {
+            put(0, concatPtr)
+            put(1, right)
+        }
+        LLVMBuildCall2(
+            builder,
+            strcatFuncType,
+            strcatFn,
+            appendArgs,
+            2,
+            "strcat_call"
+        ) ?: throw Exception("Failed to build strcat call for string concatenation.")
+
+        return concatPtr
     }
 
     private fun buildIndexExpr(expr: Expr.Index): LLVMValueRef {
@@ -1163,12 +1258,28 @@ class CodeGenerator {
         val mallocParamTypes = PointerPointer<LLVMTypeRef>(1)
         mallocParamTypes.put(0, LLVMInt64TypeInContext(context))
         mallocFuncType = LLVMFunctionType(
-            LLVMPointerType(LLVMInt8TypeInContext(context), 0),
+            charPtrType,
             mallocParamTypes,
             1,
             0
         )
         return LLVMAddFunction(module, "malloc", mallocFuncType)
+    }
+
+    private fun declareStrcpy(): LLVMValueRef {
+        val paramTypes = PointerPointer<LLVMTypeRef>(2)
+        paramTypes.put(0, charPtrType)
+        paramTypes.put(1, charPtrType)
+        strcpyFuncType = LLVMFunctionType(charPtrType, paramTypes, 2, 0)
+        return LLVMAddFunction(module, "strcpy", strcpyFuncType)
+    }
+
+    private fun declareStrcat(): LLVMValueRef {
+        val paramTypes = PointerPointer<LLVMTypeRef>(2)
+        paramTypes.put(0, charPtrType)
+        paramTypes.put(1, charPtrType)
+        strcatFuncType = LLVMFunctionType(charPtrType, paramTypes, 2, 0)
+        return LLVMAddFunction(module, "strcat", strcatFuncType)
     }
 
     private fun declareFormatStrings() {
@@ -1206,4 +1317,6 @@ class CodeGenerator {
         LLVMDisposeModule(module)
         LLVMContextDispose(context)
     }
+
+    private fun isNumeric(type: Type): Boolean = type == Type.INT || type == Type.FLOAT
 }
