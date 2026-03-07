@@ -169,6 +169,10 @@ listLiteral
     ;
 
 type
+    : simpleType ('[' type (',' type)* ']')?
+    ;
+
+simpleType
     : 'Int'
     | 'Float'
     | 'String'

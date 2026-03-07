@@ -8,11 +8,31 @@ import nl.endevelopment.parser.SlangLexer
 import nl.endevelopment.parser.SlangParser
 import nl.endevelopment.semantic.TypeChecker
 import nl.endevelopment.utils.Utils
+import org.antlr.v4.runtime.BaseErrorListener
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
+import org.antlr.v4.runtime.RecognitionException
+import org.antlr.v4.runtime.Recognizer
 import java.io.File
 
 class Compiler {
+
+    private class CollectingErrorListener : BaseErrorListener() {
+        val errors = mutableListOf<String>()
+
+        override fun syntaxError(
+            recognizer: Recognizer<*, *>?,
+            offendingSymbol: Any?,
+            line: Int,
+            charPositionInLine: Int,
+            msg: String?,
+            e: RecognitionException?
+        ) {
+            val detail = msg ?: "syntax error"
+            errors.add("Error at line $line, col ${charPositionInLine + 1}: $detail")
+        }
+    }
+
     /**
      * Compiles the given source code and outputs LLVM IR.
      *
@@ -24,12 +44,20 @@ class Compiler {
         val codeGenerator = CodeGenerator()
         try {
             // 1. Lexical Analysis
+            val errorListener = CollectingErrorListener()
             val lexer = SlangLexer(CharStreams.fromString(sourceCode))
+            lexer.removeErrorListeners()
+            lexer.addErrorListener(errorListener)
             val tokens = CommonTokenStream(lexer)
 
             // 2. Parsing tokens
             val parser = SlangParser(tokens)
+            parser.removeErrorListeners()
+            parser.addErrorListener(errorListener)
             val tree = parser.program()
+            if (errorListener.errors.isNotEmpty()) {
+                throw Exception(errorListener.errors.joinToString("\n"))
+            }
 
             // 3. Building AST
             val astBuilder = ASTBuilder()

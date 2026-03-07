@@ -5,7 +5,7 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 ## Features
 
 - **Simple syntax** inspired by modern languages
-- **Type system** with Int, Float, Bool, String, Void, and List types
+- **Type system** with Int, Float, Bool, String, Void, and typed lists (`List[T]`)
 - **Literals** for all types: integers, floats (with scientific notation), booleans, strings (with escape sequences)
 - **Variable mutability**: `let` (immutable) and `var` (mutable) with reassignment support
 - **Arithmetic operations** (+, -, *, /, %) with operator precedence
@@ -18,8 +18,8 @@ A lightweight programming language compiler written in Kotlin that compiles to L
 - **Functions** with parameters, return values, and `return` statements
 - **Classes (class-lite)** with constructor fields, instance methods, and `this` (no inheritance)
 - **Member operations**: field access (`obj.x`), field assignment (`obj.x = 1`), method calls (`obj.method()`)
-- **List literals** with indexing (`xs[0]`) and length via `len(xs)`
-- **Built-in length**: `len(List)` and `len(String)`
+- **List literals** with indexing (`xs[0]`) and typed element checking (`List[Int]`, `List[String]`, `List[Point]`)
+- **Built-ins**: `len`, `substr`, `contains`, `to_int`, `min`, `max`, `abs`
 - **Strict Bool conditions**: `if` / `while` / `for` conditions must be `Bool`
 - **Source diagnostics**: Errors include line/column locations
 - **LLVM IR generation** for efficient compilation
@@ -286,7 +286,7 @@ c.add(2);
 print(c.value);  // 3
 ```
 
-**Data Types:** Int, Float, Bool, String, List, Void, and user-defined `class` types
+**Data Types:** Int, Float, Bool, String, List[T], Void, and user-defined `class` types
 
 ### Condition Semantics
 
@@ -420,8 +420,7 @@ sudo cp slangc slangc.py /usr/local/bin/
 
 - [ ] Arrays and complex data types
 - [ ] Optimization passes
-- [ ] More built-in functions
-- [ ] String manipulation functions
+- [ ] Collection mutation helpers (`push`/`pop`)
 - [ ] Module/import system
 
 ## Testing

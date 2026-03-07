@@ -344,4 +344,31 @@ class CodeGeneratorTest {
         assertTrue(ir.contains("declare ptr @strcat(ptr, ptr)"))
         assertTrue(ir.contains("call ptr @strcat"))
     }
+
+    @Test
+    fun testTypedStringListUsesOpaqueListStorage() {
+        val source = """
+            let words: List[String] = ["a", "b"];
+            print(words[1]);
+        """.trimIndent()
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("%List = type { i64, ptr }"))
+        assertTrue(ir.contains("list_data_ptr"))
+    }
+
+    @Test
+    fun testBuiltInStringHelpersGenerateCalls() {
+        val source = """
+            let s: String = "slang";
+            print(substr(s, 1, 3));
+            print(contains(s, "la"));
+            print(to_int("7"));
+        """.trimIndent()
+        val ir = generateIR(source)
+
+        assertTrue(ir.contains("declare ptr @strncpy(ptr, ptr, i64)"))
+        assertTrue(ir.contains("declare ptr @strstr(ptr, ptr)"))
+        assertTrue(ir.contains("declare i32 @atoi(ptr)"))
+    }
 }
