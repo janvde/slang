@@ -28,6 +28,9 @@ class CodeGenerator {
     private lateinit var mallocFuncType: LLVMTypeRef
     private lateinit var strcpyFuncType: LLVMTypeRef
     private lateinit var strcatFuncType: LLVMTypeRef
+    private lateinit var strncpyFuncType: LLVMTypeRef
+    private lateinit var strstrFuncType: LLVMTypeRef
+    private lateinit var atoiFuncType: LLVMTypeRef
 
     private val functions = mutableMapOf<String, FunctionInfo>()
     private val classStructTypes = mutableMapOf<String, LLVMTypeRef>()
@@ -38,6 +41,7 @@ class CodeGenerator {
 
     private val listStructType: LLVMTypeRef = LLVMStructCreateNamed(context, "List")
     private val loopTargets = mutableListOf<LoopTarget>()
+    private val builtInFunctions = setOf("len", "substr", "contains", "to_int", "min", "max", "abs")
 
     private data class FunctionInfo(
         val name: String,
@@ -92,7 +96,7 @@ class CodeGenerator {
     private fun declareListType() {
         val elements = PointerPointer<LLVMTypeRef>(2)
         elements.put(0L, LLVMInt64TypeInContext(context))
-        elements.put(1L, LLVMPointerType(LLVMInt32TypeInContext(context), 0))
+        elements.put(1L, charPtrType)
         LLVMStructSetBody(listStructType, elements, 2, 0)
     }
 
@@ -175,14 +179,16 @@ class CodeGenerator {
     }
 
     private fun visit(stmt: Stmt.LetStmt) {
-        val exprValue = visit(stmt.expr)
+        val rawExprValue = visit(stmt.expr)
+        val exprValue = castValueIfNeeded(rawExprValue, inferExprType(stmt.expr), stmt.type)
         val varPtr = LLVMBuildAlloca(builder, llvmTypeFor(stmt.type), stmt.name)
         LLVMBuildStore(builder, exprValue, varPtr)
         codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = true)
     }
 
     private fun visit(stmt: Stmt.VarStmt) {
-        val exprValue = visit(stmt.expr)
+        val rawExprValue = visit(stmt.expr)
+        val exprValue = castValueIfNeeded(rawExprValue, inferExprType(stmt.expr), stmt.type)
         val varPtr = LLVMBuildAlloca(builder, llvmTypeFor(stmt.type), stmt.name)
         LLVMBuildStore(builder, exprValue, varPtr)
         codegenSymbolTable[stmt.name] = SymbolInfo(stmt.type, varPtr, immutable = false)
@@ -196,7 +202,8 @@ class CodeGenerator {
             throw Exception("Cannot reassign immutable variable '${stmt.name}'.")
         }
 
-        val exprValue = visit(stmt.expr)
+        val rawExprValue = visit(stmt.expr)
+        val exprValue = castValueIfNeeded(rawExprValue, inferExprType(stmt.expr), symbol.type)
         LLVMBuildStore(builder, exprValue, symbol.ptr)
     }
 
@@ -215,7 +222,8 @@ class CodeGenerator {
 
         val targetValue = visit(stmt.target)
         val fieldPtr = LLVMBuildStructGEP2(builder, classInfo.structType, targetValue, field.index, "${stmt.member}_ptr")
-        val value = visit(stmt.expr)
+        val rawValue = visit(stmt.expr)
+        val value = castValueIfNeeded(rawValue, inferExprType(stmt.expr), field.type)
         LLVMBuildStore(builder, value, fieldPtr)
     }
 
@@ -228,8 +236,8 @@ class CodeGenerator {
         val printfFunc = LLVMGetNamedFunction(module, "printf") ?: declarePrintf()
         val exprType = inferExprType(expr)
 
-        if (exprType == Type.LIST) {
-            emitPrintList(exprValue, printfFunc)
+        if (exprType is Type.LIST) {
+            emitPrintList(exprValue, exprType.elementType ?: Type.INT, printfFunc, location)
             return
         }
 
@@ -379,7 +387,15 @@ class CodeGenerator {
     private fun visit(stmt: Stmt.ReturnStmt) {
         val expectedReturnType = currentFunctionReturnType
             ?: throw Exception("Return statement is only valid inside a function.")
-        val returnValue = stmt.expr?.let { visit(it) }
+        val returnValue = stmt.expr?.let { expr ->
+            val raw = visit(expr)
+            val expected = expectedReturnType
+            if (expected != null) {
+                castValueIfNeeded(raw, inferExprType(expr), expected)
+            } else {
+                raw
+            }
+        }
 
         if (expectedReturnType == Type.VOID) {
             if (returnValue != null) {
@@ -423,16 +439,31 @@ class CodeGenerator {
         ) ?: throw Exception("Failed to build call to printf")
     }
 
-    private fun emitPrintList(listPtr: LLVMValueRef, printfFunc: LLVMValueRef) {
+    private fun emitPrintList(
+        listPtr: LLVMValueRef,
+        elementType: Type,
+        printfFunc: LLVMValueRef,
+        location: SourceLocation
+    ) {
+        if (elementType is Type.CLASS || elementType is Type.LIST) {
+            fail(location, "Printing nested/object lists is not supported in v1 native mode.")
+        }
+
         val lenPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 0, "list_len_ptr")
         val dataPtrPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 1, "list_data_ptr")
 
         val lenVal = LLVMBuildLoad2(builder, LLVMInt64TypeInContext(context), lenPtr, "list_len")
         val dataPtr = LLVMBuildLoad2(
             builder,
-            LLVMPointerType(LLVMInt32TypeInContext(context), 0),
+            charPtrType,
             dataPtrPtr,
             "list_data"
+        )
+        val typedDataPtr = LLVMBuildBitCast(
+            builder,
+            dataPtr,
+            LLVMPointerType(llvmTypeFor(elementType), 0),
+            "typed_list_data"
         )
 
         val currentBlock = LLVMGetInsertBlock(builder)
@@ -457,16 +488,16 @@ class CodeGenerator {
         }
         val elemPtr = LLVMBuildGEP2(
             builder,
-            LLVMInt32TypeInContext(context),
-            dataPtr,
+            llvmTypeFor(elementType),
+            typedDataPtr,
             elemIndices,
             1,
             "list_elem_ptr"
         )
-        val elemVal = LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), elemPtr, "list_elem")
+        val elemVal = LLVMBuildLoad2(builder, llvmTypeFor(elementType), elemPtr, "list_elem")
 
-        val formatStr = formatStrings[Type.INT]
-            ?: throw Exception("No format string found for type: ${Type.INT}")
+        val formatStr = formatStrings[elementType]
+            ?: throw Exception("No format string found for type: $elementType")
         val zero = LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0)
         val indices = PointerPointer<LLVMValueRef>(2).apply {
             put(0, zero)
@@ -495,15 +526,22 @@ class CodeGenerator {
     }
 
     private fun buildListLiteral(expr: Expr.ListLiteral): LLVMValueRef {
+        val listType = inferExprType(expr) as? Type.LIST
+            ?: throw Exception("List literal must infer to a List type.")
+        val elementType = listType.elementType ?: Type.INT
+        val elementLLVMType = llvmTypeFor(elementType)
+
         val length = expr.elements.size
         val lenValue = LLVMConstInt(LLVMInt64TypeInContext(context), length.toLong(), 0)
         val dataPtr = if (length == 0) {
-            LLVMConstNull(LLVMPointerType(LLVMInt32TypeInContext(context), 0))
+            LLVMConstNull(charPtrType)
         } else {
-            val arrayType = LLVMArrayType(LLVMInt32TypeInContext(context), length)
+            val arrayType = LLVMArrayType(elementLLVMType, length)
             val arrayAlloca = LLVMBuildAlloca(builder, arrayType, "list_data")
             expr.elements.forEachIndexed { index, element ->
-                val elemValue = visit(element)
+                val rawElemValue = visit(element)
+                val elemType = inferExprType(element)
+                val elemValue = castValueIfNeeded(rawElemValue, elemType, elementType)
                 val indices = PointerPointer<LLVMValueRef>(2).apply {
                     put(0, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
                     put(1, LLVMConstInt(LLVMInt32TypeInContext(context), index.toLong(), 0))
@@ -523,7 +561,7 @@ class CodeGenerator {
                 put(0, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
                 put(1, LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0))
             }
-            LLVMBuildGEP2(
+            val rawDataPtr = LLVMBuildGEP2(
                 builder,
                 arrayType,
                 arrayAlloca,
@@ -531,6 +569,7 @@ class CodeGenerator {
                 2,
                 "list_data_ptr"
             )
+            LLVMBuildBitCast(builder, rawDataPtr, charPtrType, "list_data_i8")
         }
 
         val listAlloca = LLVMBuildAlloca(builder, listStructType, "list_struct")
@@ -563,8 +602,8 @@ class CodeGenerator {
             }
 
             is Expr.Call -> {
-                if (expr.name == "len") {
-                    Type.INT
+                if (expr.name in builtInFunctions) {
+                    inferBuiltInCallType(expr)
                 } else {
                     classes[expr.name]?.let { return Type.CLASS(expr.name) }
                     functions[expr.name]?.returnType
@@ -592,8 +631,12 @@ class CodeGenerator {
                     ?: throw Exception("Class '$className' has no method '${expr.method}'.")
             }
 
-            is Expr.ListLiteral -> Type.LIST
-            is Expr.Index -> Type.INT
+            is Expr.ListLiteral -> inferListLiteralType(expr)
+            is Expr.Index -> {
+                val targetType = inferExprType(expr.target) as? Type.LIST
+                    ?: throw Exception("Indexing is only supported on List values.")
+                targetType.elementType ?: Type.INT
+            }
             is Expr.BinaryOp -> when (expr.operator) {
                 ">", "<", ">=", "<=", "==", "!=", "&&", "||" -> Type.BOOL
                 "+" -> {
@@ -620,6 +663,84 @@ class CodeGenerator {
                 "%" -> Type.INT
                 else -> Type.INT
             }
+        }
+    }
+
+    private fun inferListLiteralType(expr: Expr.ListLiteral): Type {
+        if (expr.elements.isEmpty()) {
+            return Type.LIST(Type.INT)
+        }
+
+        var elementType = inferExprType(expr.elements.first())
+        expr.elements.drop(1).forEach { element ->
+            val nextType = inferExprType(element)
+            if (elementType == nextType) {
+                return@forEach
+            }
+            if (isNumeric(elementType) && isNumeric(nextType)) {
+                elementType = Type.FLOAT
+                return@forEach
+            }
+            throw Exception(
+                "List literal element types must be homogeneous. Found $elementType and $nextType."
+            )
+        }
+        return Type.LIST(elementType)
+    }
+
+    private fun inferBuiltInCallType(expr: Expr.Call): Type {
+        return when (expr.name) {
+            "len" -> {
+                if (expr.args.size != 1) {
+                    throw Exception("len expects 1 argument, got ${expr.args.size}.")
+                }
+                Type.INT
+            }
+
+            "substr" -> {
+                if (expr.args.size != 3) {
+                    throw Exception("substr expects 3 arguments, got ${expr.args.size}.")
+                }
+                Type.STRING
+            }
+
+            "contains" -> {
+                if (expr.args.size != 2) {
+                    throw Exception("contains expects 2 arguments, got ${expr.args.size}.")
+                }
+                Type.BOOL
+            }
+
+            "to_int" -> {
+                if (expr.args.size != 1) {
+                    throw Exception("to_int expects 1 argument, got ${expr.args.size}.")
+                }
+                Type.INT
+            }
+
+            "min", "max" -> {
+                if (expr.args.size != 2) {
+                    throw Exception("${expr.name} expects 2 arguments, got ${expr.args.size}.")
+                }
+                val left = inferExprType(expr.args[0])
+                val right = inferExprType(expr.args[1])
+                if (!isNumeric(left) || !isNumeric(right)) {
+                    throw Exception("${expr.name} expects numeric arguments.")
+                }
+                if (left == Type.INT && right == Type.INT) Type.INT else Type.FLOAT
+            }
+
+            "abs" -> {
+                if (expr.args.size != 1) {
+                    throw Exception("abs expects 1 argument, got ${expr.args.size}.")
+                }
+                val argType = inferExprType(expr.args[0])
+                if (!isNumeric(argType)) {
+                    throw Exception("abs expects a numeric argument.")
+                }
+                argType
+            }
+            else -> throw Exception("Unknown built-in function '${expr.name}'.")
         }
     }
 
@@ -784,17 +905,8 @@ class CodeGenerator {
     }
 
     private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {
-        if (expr.name == "len") {
-            if (expr.args.size != 1) {
-                fail(expr.location, "len expects 1 argument, got ${expr.args.size}.")
-            }
-            val argType = inferExprType(expr.args[0])
-            val argValue = visit(expr.args[0])
-            return when (argType) {
-                Type.LIST -> buildListLength(argValue)
-                Type.STRING -> buildStringLength(argValue)
-                else -> fail(expr.args[0].location, "len expects a List or String argument.")
-            }
+        if (expr.name in builtInFunctions) {
+            return buildBuiltInCall(expr)
         }
 
         classes[expr.name]?.let { classInfo ->
@@ -813,7 +925,9 @@ class CodeGenerator {
 
         val args = PointerPointer<LLVMValueRef>(expr.args.size.toLong())
         expr.args.forEachIndexed { index, arg ->
-            args.put(index.toLong(), visit(arg))
+            val rawArg = visit(arg)
+            val coercedArg = castValueIfNeeded(rawArg, inferExprType(arg), info.paramTypes[index])
+            args.put(index.toLong(), coercedArg)
         }
 
         val callValue = LLVMBuildCall2(
@@ -825,6 +939,31 @@ class CodeGenerator {
             if (info.returnType == Type.VOID) "" else "calltmp"
         ) ?: throw Exception("Failed to build call for function '${expr.name}'.")
         return callValue
+    }
+
+    private fun buildBuiltInCall(expr: Expr.Call): LLVMValueRef {
+        return when (expr.name) {
+            "len" -> {
+                if (expr.args.size != 1) {
+                    fail(expr.location, "len expects 1 argument, got ${expr.args.size}.")
+                }
+                val argType = inferExprType(expr.args[0])
+                val argValue = visit(expr.args[0])
+                return when (argType) {
+                    is Type.LIST -> buildListLength(argValue)
+                    Type.STRING -> buildStringLength(argValue)
+                    else -> fail(expr.args[0].location, "len expects a List or String argument.")
+                }
+            }
+
+            "substr" -> buildSubstrCall(expr)
+            "contains" -> buildContainsCall(expr)
+            "to_int" -> buildToIntCall(expr)
+            "min" -> buildMinOrMaxCall(expr, findMin = true)
+            "max" -> buildMinOrMaxCall(expr, findMin = false)
+            "abs" -> buildAbsCall(expr)
+            else -> throw Exception("Unknown built-in function '${expr.name}'.")
+        }
     }
 
     private fun buildMemberCall(expr: Expr.MemberCall, allowVoid: Boolean): LLVMValueRef {
@@ -846,7 +985,9 @@ class CodeGenerator {
         val args = PointerPointer<LLVMValueRef>((expr.args.size + 1).toLong())
         args.put(0L, visit(expr.receiver))
         expr.args.forEachIndexed { index, arg ->
-            args.put((index + 1).toLong(), visit(arg))
+            val rawArg = visit(arg)
+            val coercedArg = castValueIfNeeded(rawArg, inferExprType(arg), methodInfo.paramTypes[index])
+            args.put((index + 1).toLong(), coercedArg)
         }
 
         val callValue = LLVMBuildCall2(
@@ -859,6 +1000,190 @@ class CodeGenerator {
         ) ?: throw Exception("Failed to build call for method '${expr.method}'.")
 
         return callValue
+    }
+
+    private fun buildSubstrCall(expr: Expr.Call): LLVMValueRef {
+        if (expr.args.size != 3) {
+            fail(expr.location, "substr expects 3 arguments, got ${expr.args.size}.")
+        }
+
+        val sourceType = inferExprType(expr.args[0])
+        val startType = inferExprType(expr.args[1])
+        val lengthType = inferExprType(expr.args[2])
+        if (sourceType != Type.STRING || startType != Type.INT || lengthType != Type.INT) {
+            fail(expr.location, "substr expects (String, Int, Int).")
+        }
+
+        val source = visit(expr.args[0])
+        val start = visit(expr.args[1])
+        val length = visit(expr.args[2])
+
+        val strncpyFn = LLVMGetNamedFunction(module, "strncpy") ?: declareStrncpy()
+        val mallocFn = LLVMGetNamedFunction(module, "malloc") ?: declareMalloc()
+
+        val start64 = LLVMBuildSExt(builder, start, LLVMInt64TypeInContext(context), "substr_start_64")
+        val length64 = LLVMBuildSExt(builder, length, LLVMInt64TypeInContext(context), "substr_len_64")
+
+        val sourceOffsetIndices = PointerPointer<LLVMValueRef>(1).apply { put(0, start64) }
+        val sourceSlice = LLVMBuildGEP2(
+            builder,
+            LLVMInt8TypeInContext(context),
+            source,
+            sourceOffsetIndices,
+            1,
+            "substr_slice_start"
+        )
+
+        val allocLength = LLVMBuildAdd(
+            builder,
+            length64,
+            LLVMConstInt(LLVMInt64TypeInContext(context), 1, 0),
+            "substr_alloc_len"
+        )
+        val mallocArgs = PointerPointer<LLVMValueRef>(1).apply { put(0, allocLength) }
+        val outBuffer = LLVMBuildCall2(
+            builder,
+            mallocFuncType,
+            mallocFn,
+            mallocArgs,
+            1,
+            "substr_out_buf"
+        ) ?: throw Exception("Failed to allocate substr buffer.")
+
+        val strncpyArgs = PointerPointer<LLVMValueRef>(3).apply {
+            put(0, outBuffer)
+            put(1, sourceSlice)
+            put(2, length64)
+        }
+        LLVMBuildCall2(
+            builder,
+            strncpyFuncType,
+            strncpyFn,
+            strncpyArgs,
+            3,
+            "strncpy_call"
+        ) ?: throw Exception("Failed to build strncpy call for substr.")
+
+        val nullTermIndices = PointerPointer<LLVMValueRef>(1).apply { put(0, length64) }
+        val nullTermPtr = LLVMBuildGEP2(
+            builder,
+            LLVMInt8TypeInContext(context),
+            outBuffer,
+            nullTermIndices,
+            1,
+            "substr_null_term_ptr"
+        )
+        LLVMBuildStore(builder, LLVMConstInt(LLVMInt8TypeInContext(context), 0, 0), nullTermPtr)
+        return outBuffer
+    }
+
+    private fun buildContainsCall(expr: Expr.Call): LLVMValueRef {
+        if (expr.args.size != 2) {
+            fail(expr.location, "contains expects 2 arguments, got ${expr.args.size}.")
+        }
+        val haystackType = inferExprType(expr.args[0])
+        val needleType = inferExprType(expr.args[1])
+        if (haystackType != Type.STRING || needleType != Type.STRING) {
+            fail(expr.location, "contains expects (String, String).")
+        }
+
+        val haystack = visit(expr.args[0])
+        val needle = visit(expr.args[1])
+        val strstrFn = LLVMGetNamedFunction(module, "strstr") ?: declareStrstr()
+        val args = PointerPointer<LLVMValueRef>(2).apply {
+            put(0, haystack)
+            put(1, needle)
+        }
+        val result = LLVMBuildCall2(
+            builder,
+            strstrFuncType,
+            strstrFn,
+            args,
+            2,
+            "strstr_call"
+        ) ?: throw Exception("Failed to build call to strstr.")
+        return LLVMBuildICmp(
+            builder,
+            LLVMIntNE,
+            result,
+            LLVMConstNull(charPtrType),
+            "contains_result"
+        )
+    }
+
+    private fun buildToIntCall(expr: Expr.Call): LLVMValueRef {
+        if (expr.args.size != 1) {
+            fail(expr.location, "to_int expects 1 argument, got ${expr.args.size}.")
+        }
+        val argType = inferExprType(expr.args[0])
+        if (argType != Type.STRING) {
+            fail(expr.location, "to_int expects a String argument.")
+        }
+
+        val atoiFn = LLVMGetNamedFunction(module, "atoi") ?: declareAtoi()
+        val arg = visit(expr.args[0])
+        val args = PointerPointer<LLVMValueRef>(1).apply { put(0, arg) }
+        return LLVMBuildCall2(
+            builder,
+            atoiFuncType,
+            atoiFn,
+            args,
+            1,
+            "atoi_call"
+        ) ?: throw Exception("Failed to build call to atoi.")
+    }
+
+    private fun buildMinOrMaxCall(expr: Expr.Call, findMin: Boolean): LLVMValueRef {
+        if (expr.args.size != 2) {
+            fail(expr.location, "${expr.name} expects 2 arguments, got ${expr.args.size}.")
+        }
+
+        val leftType = inferExprType(expr.args[0])
+        val rightType = inferExprType(expr.args[1])
+        if (!isNumeric(leftType) || !isNumeric(rightType)) {
+            fail(expr.location, "${expr.name} expects numeric arguments.")
+        }
+
+        var left = visit(expr.args[0])
+        var right = visit(expr.args[1])
+        val bothInt = leftType == Type.INT && rightType == Type.INT
+        if (!bothInt) {
+            left = castValueIfNeeded(left, leftType, Type.FLOAT)
+            right = castValueIfNeeded(right, rightType, Type.FLOAT)
+            val predicate = if (findMin) LLVMRealOLT else LLVMRealOGT
+            val cmp = LLVMBuildFCmp(builder, predicate, left, right, "minmax_cmp")
+            return LLVMBuildSelect(builder, cmp, left, right, "minmax_float")
+        }
+
+        val predicate = if (findMin) LLVMIntSLT else LLVMIntSGT
+        val cmp = LLVMBuildICmp(builder, predicate, left, right, "minmax_cmp")
+        return LLVMBuildSelect(builder, cmp, left, right, "minmax_int")
+    }
+
+    private fun buildAbsCall(expr: Expr.Call): LLVMValueRef {
+        if (expr.args.size != 1) {
+            fail(expr.location, "abs expects 1 argument, got ${expr.args.size}.")
+        }
+
+        val argType = inferExprType(expr.args[0])
+        val arg = visit(expr.args[0])
+        return when (argType) {
+            Type.INT -> {
+                val zero = LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0)
+                val isNegative = LLVMBuildICmp(builder, LLVMIntSLT, arg, zero, "abs_int_is_neg")
+                val negated = LLVMBuildNeg(builder, arg, "abs_int_neg")
+                LLVMBuildSelect(builder, isNegative, negated, arg, "abs_int")
+            }
+
+            Type.FLOAT -> {
+                val zero = LLVMConstReal(LLVMFloatTypeInContext(context), 0.0)
+                val isNegative = LLVMBuildFCmp(builder, LLVMRealOLT, arg, zero, "abs_float_is_neg")
+                val negated = LLVMBuildFNeg(builder, arg, "abs_float_neg")
+                LLVMBuildSelect(builder, isNegative, negated, arg, "abs_float")
+            }
+
+            else -> fail(expr.location, "abs expects a numeric argument.")
+        }
     }
 
     private fun buildClassConstructorCall(classInfo: ClassInfo, expr: Expr.Call): LLVMValueRef {
@@ -883,7 +1208,8 @@ class CodeGenerator {
 
         classInfo.fields.forEachIndexed { index, field ->
             val fieldPtr = LLVMBuildStructGEP2(builder, classInfo.structType, objPtr, index, "${field.name}_ptr")
-            val value = visit(expr.args[index])
+            val rawValue = visit(expr.args[index])
+            val value = castValueIfNeeded(rawValue, inferExprType(expr.args[index]), field.type)
             LLVMBuildStore(builder, value, fieldPtr)
         }
 
@@ -984,27 +1310,37 @@ class CodeGenerator {
     }
 
     private fun buildIndexExpr(expr: Expr.Index): LLVMValueRef {
+        val targetType = inferExprType(expr.target) as? Type.LIST
+            ?: fail(expr.target.location, "Indexing is only supported on List values.")
+        val elementType = targetType.elementType ?: Type.INT
+
         val listPtr = visit(expr.target)
         val indexValue = visit(expr.index)
         val dataPtrPtr = LLVMBuildStructGEP2(builder, listStructType, listPtr, 1, "list_data_ptr")
-        val dataPtr = LLVMBuildLoad2(
+        val dataPtrI8 = LLVMBuildLoad2(
             builder,
-            LLVMPointerType(LLVMInt32TypeInContext(context), 0),
+            charPtrType,
             dataPtrPtr,
             "list_data"
+        )
+        val dataPtr = LLVMBuildBitCast(
+            builder,
+            dataPtrI8,
+            LLVMPointerType(llvmTypeFor(elementType), 0),
+            "typed_list_data"
         )
         val elemIndices = PointerPointer<LLVMValueRef>(1).apply {
             put(0, indexValue)
         }
         val elemPtr = LLVMBuildGEP2(
             builder,
-            LLVMInt32TypeInContext(context),
+            llvmTypeFor(elementType),
             dataPtr,
             elemIndices,
             1,
             "list_elem_ptr"
         )
-        return LLVMBuildLoad2(builder, LLVMInt32TypeInContext(context), elemPtr, "list_elem")
+        return LLVMBuildLoad2(builder, llvmTypeFor(elementType), elemPtr, "list_elem")
     }
 
     private fun declareClassTypes(classDefs: List<Stmt.ClassDef>) {
@@ -1091,8 +1427,8 @@ class CodeGenerator {
         if (functions.containsKey(stmt.name)) {
             throw Exception("Function '${stmt.name}' already declared.")
         }
-        if (stmt.name == "len") {
-            throw Exception("Cannot redefine built-in function 'len'.")
+        if (stmt.name in builtInFunctions) {
+            throw Exception("Cannot redefine built-in function '${stmt.name}'.")
         }
         if (classes.containsKey(stmt.name)) {
             throw Exception("Function '${stmt.name}' conflicts with class '${stmt.name}'.")
@@ -1208,7 +1544,7 @@ class CodeGenerator {
             Type.FLOAT -> LLVMBuildRet(builder, LLVMConstReal(LLVMFloatTypeInContext(context), 0.0))
             Type.BOOL -> LLVMBuildRet(builder, LLVMConstInt(LLVMInt1TypeInContext(context), 0, 0))
             Type.STRING -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(context), 0)))
-            Type.LIST -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(listStructType, 0)))
+            is Type.LIST -> LLVMBuildRet(builder, LLVMConstNull(LLVMPointerType(listStructType, 0)))
             is Type.CLASS -> {
                 val structType = classStructTypes[type.name]
                     ?: throw Exception("Unknown class '${type.name}'.")
@@ -1223,7 +1559,7 @@ class CodeGenerator {
             Type.FLOAT -> LLVMFloatTypeInContext(context)
             Type.BOOL -> LLVMInt1TypeInContext(context)
             Type.STRING -> LLVMPointerType(LLVMInt8TypeInContext(context), 0)
-            Type.LIST -> LLVMPointerType(listStructType, 0)
+            is Type.LIST -> LLVMPointerType(listStructType, 0)
             Type.VOID -> LLVMVoidTypeInContext(context)
             is Type.CLASS -> {
                 val structType = classStructTypes[type.name]
@@ -1282,6 +1618,30 @@ class CodeGenerator {
         return LLVMAddFunction(module, "strcat", strcatFuncType)
     }
 
+    private fun declareStrncpy(): LLVMValueRef {
+        val paramTypes = PointerPointer<LLVMTypeRef>(3)
+        paramTypes.put(0, charPtrType)
+        paramTypes.put(1, charPtrType)
+        paramTypes.put(2, LLVMInt64TypeInContext(context))
+        strncpyFuncType = LLVMFunctionType(charPtrType, paramTypes, 3, 0)
+        return LLVMAddFunction(module, "strncpy", strncpyFuncType)
+    }
+
+    private fun declareStrstr(): LLVMValueRef {
+        val paramTypes = PointerPointer<LLVMTypeRef>(2)
+        paramTypes.put(0, charPtrType)
+        paramTypes.put(1, charPtrType)
+        strstrFuncType = LLVMFunctionType(charPtrType, paramTypes, 2, 0)
+        return LLVMAddFunction(module, "strstr", strstrFuncType)
+    }
+
+    private fun declareAtoi(): LLVMValueRef {
+        val paramTypes = PointerPointer<LLVMTypeRef>(1)
+        paramTypes.put(0, charPtrType)
+        atoiFuncType = LLVMFunctionType(LLVMInt32TypeInContext(context), paramTypes, 1, 0)
+        return LLVMAddFunction(module, "atoi", atoiFuncType)
+    }
+
     private fun declareFormatStrings() {
         fun createGlobalString(name: String, value: String): LLVMValueRef {
             val strLength = value.length
@@ -1298,6 +1658,16 @@ class CodeGenerator {
         formatStrings[Type.STRING] = createGlobalString("fmt_str", "%s\n")
         formatStrings[Type.FLOAT] = createGlobalString("fmt_float", "%f\n")
         formatStrings[Type.BOOL] = createGlobalString("fmt_bool", "%d\n")
+    }
+
+    private fun castValueIfNeeded(value: LLVMValueRef, fromType: Type, toType: Type): LLVMValueRef {
+        if (fromType == toType) {
+            return value
+        }
+        if (fromType == Type.INT && toType == Type.FLOAT) {
+            return LLVMBuildSIToFP(builder, value, LLVMFloatTypeInContext(context), "int_to_float")
+        }
+        return value
     }
 
     fun printIR() {

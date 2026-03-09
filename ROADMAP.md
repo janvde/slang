@@ -1,10 +1,10 @@
 # Slang Roadmap (Next Functionality)
 
-Last updated: 2026-03-04
+Last updated: 2026-03-06
 
 ## Current Baseline
 - Parser, type checker, interpreter, and LLVM codegen are in place.
-- Core language works: variables, control flow, functions, classes (no inheritance), lists, `len`.
+- Core language works: variables, control flow, functions, classes (no inheritance), typed lists, and stdlib v1 built-ins.
 - Test suite is green (`./gradlew test`).
 - String concatenation parity is in place for `String + String` across interpreter and LLVM/native modes.
 
@@ -29,13 +29,13 @@ Definition of done:
 - [x] At least 6 new tests for string concat paths (literal+literal, var+literal, expression nesting, function return, class field usage, failure cases).
 - [x] Docs updated to remove current limitation note.
 
-## 2) Typed Lists and Safer Collection Semantics (P1)
+## 2) Typed Lists and Safer Collection Semantics (P1) - Completed in 1.3 (2026-03-06)
 Goal: move from Int-only list assumptions to typed lists that scale with the language.
 
 Scope:
-- Add typed list syntax, e.g. `List[Int]`, `List[String]`, `List[Point]`.
-- Type-check list literals for homogeneity and enforce element type on index reads.
-- Keep `len(List[...]) -> Int`.
+- [x] Add typed list syntax, e.g. `List[Int]`, `List[String]`, `List[Point]`.
+- [x] Type-check list literals for homogeneity and enforce element type on index reads.
+- [x] Keep `len(List[...]) -> Int`.
 
 Implementation areas:
 - [src/main/antlr/Slang.g4](/Users/jan/Projects/slang/src/main/antlr/Slang.g4)
@@ -45,9 +45,9 @@ Implementation areas:
 - [src/main/kotlin/codegen/CodeGenerator.kt](/Users/jan/Projects/slang/src/main/kotlin/codegen/CodeGenerator.kt)
 
 Definition of done:
-- `let xs: List[Int] = [1,2,3]; let a: Int = xs[0];` passes.
-- `let xs: List[Int] = [1, "x"];` fails with location-aware error.
-- Existing untyped `List` programs either remain supported (compat mode) or have a documented migration path.
+- [x] `let xs: List[Int] = [1,2,3]; let a: Int = xs[0];` passes.
+- [x] `let xs: List[Int] = [1, "x"];` fails with location-aware error.
+- [x] Existing untyped `List` programs either remain supported (compat mode) or have a documented migration path.
 
 ## 3) List Mutation + Basic Collection Built-ins (P1)
 Goal: make lists practical for non-trivial programs.
@@ -66,31 +66,31 @@ Definition of done:
 - Out-of-bounds and invalid-type operations report clear source locations.
 - Bench test (simple append loop) is added to prevent severe regressions.
 
-## 4) Better Diagnostics and Error Recovery (P1)
+## 4) Better Diagnostics and Error Recovery (P1) - Completed in 1.3 (2026-03-06)
 Goal: make compiler errors faster to understand and fix.
 
 Scope:
-- Improve type mismatch diagnostics with expected/actual formatting.
-- Add related-location notes for duplicate definitions and symbol conflicts.
-- Improve parser recovery so one syntax error does not hide downstream issues.
+- [x] Improve type mismatch diagnostics with expected/actual formatting.
+- [x] Add related-location notes for duplicate definitions and symbol conflicts.
+- [x] Improve parser recovery so one syntax error does not hide downstream issues.
 
 Definition of done:
-- Diagnostics include location + concise fix-oriented message.
-- At least 10 new tests for diagnostic quality and parser recovery.
-- Error output is consistent across parser, type checker, and codegen phases.
+- [x] Diagnostics include location + concise fix-oriented message.
+- [x] At least 10 new tests for diagnostic quality and parser recovery.
+- [x] Error output is consistent across parser, type checker, and codegen phases.
 
-## 5) Standard Library v1 (P1)
+## 5) Standard Library v1 (P1) - Completed in 1.3 (2026-03-06)
 Goal: reduce user boilerplate with high-value built-ins.
 
 Scope:
-- Add string built-ins: `substr`, `contains`, `to_int`.
-- Add numeric built-ins: `min`, `max`, `abs`.
-- Keep semantics aligned between interpreter and LLVM/native.
+- [x] Add string built-ins: `substr`, `contains`, `to_int`.
+- [x] Add numeric built-ins: `min`, `max`, `abs`.
+- [x] Keep semantics aligned between interpreter and LLVM/native.
 
 Definition of done:
-- Built-ins are available in both execution modes.
-- Invalid argument types/arity produce location-aware errors.
-- Syntax docs and examples include all new built-ins.
+- [x] Built-ins are available in both execution modes.
+- [x] Invalid argument types/arity produce location-aware errors.
+- [x] Syntax docs and examples include all new built-ins.
 
 ## 6) For-Each Loops (P1)
 Goal: make iteration idiomatic and less index-heavy.
@@ -205,7 +205,7 @@ Definition of done:
 
 ## Suggested Delivery Plan
 1. Release 1.2 (completed on 2026-03-04): Item 1 (String parity), test/docs cleanup.
-2. Release 1.3: Items 2, 4, and 5 (typed lists + diagnostics + stdlib v1).
+2. Release 1.3 (completed on 2026-03-06): Items 2, 4, and 5 (typed lists + diagnostics + stdlib v1).
 3. Release 1.4: Items 3 and 6 (list mutation + for-each loops).
 4. Release 1.5: Items 7 and 8 (local inference + modules/imports).
 5. Release 1.6: Items 9 and 12 (enums/match + visibility/encapsulation).

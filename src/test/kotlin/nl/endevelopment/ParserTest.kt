@@ -6,6 +6,7 @@ import nl.endevelopment.ast.Stmt
 import nl.endevelopment.parser.ASTBuilder
 import nl.endevelopment.parser.SlangLexer
 import nl.endevelopment.parser.SlangParser
+import nl.endevelopment.semantic.Type
 import org.antlr.v4.runtime.CharStreams
 import org.antlr.v4.runtime.CommonTokenStream
 import kotlin.test.Test
@@ -161,5 +162,24 @@ class ParserTest {
         val printStmt = ast.statements[4]
         assertIs<Stmt.PrintStmt>(printStmt)
         assertIs<Expr.MemberAccess>(printStmt.expr)
+    }
+
+    @Test
+    fun testTypedListAnnotationParses() {
+        val source = """
+            let words: List[String] = ["a", "b"];
+            let nums: List = [1, 2, 3];
+        """.trimIndent()
+
+        val ast = parse(source)
+        assertEquals(2, ast.statements.size)
+
+        val wordsStmt = ast.statements[0]
+        assertIs<Stmt.LetStmt>(wordsStmt)
+        assertEquals(Type.LIST(Type.STRING), wordsStmt.type)
+
+        val numsStmt = ast.statements[1]
+        assertIs<Stmt.LetStmt>(numsStmt)
+        assertEquals(Type.LIST(Type.INT), numsStmt.type)
     }
 }

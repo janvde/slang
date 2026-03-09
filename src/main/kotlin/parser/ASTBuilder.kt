@@ -23,8 +23,70 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         return SourceLocation(token.line, token.charPositionInLine + 1)
     }
 
-    private fun parseType(typeText: String): Type {
-        return Type.fromName(typeText)
+    private fun parseType(typeCtx: SlangParser.TypeContext): Type {
+        return parseTypeText(typeCtx.text)
+    }
+
+    private fun parseTypeText(typeText: String): Type {
+        if (!typeText.contains("[")) {
+            return Type.fromName(typeText)
+        }
+
+        val base = typeText.substringBefore("[")
+        val argsText = typeText.substringAfter("[").removeSuffix("]")
+        val args = splitTopLevelTypeArgs(argsText).map { parseTypeText(it) }
+
+        return when (base) {
+            "List" -> {
+                if (args.size != 1) {
+                    throw RuntimeException("List type expects exactly one type argument.")
+                }
+                Type.LIST(args[0])
+            }
+
+            else -> throw RuntimeException("Generic type '$base' is not supported.")
+        }
+    }
+
+    private fun splitTopLevelTypeArgs(argsText: String): List<String> {
+        if (argsText.isBlank()) {
+            return emptyList()
+        }
+
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var depth = 0
+
+        argsText.forEach { ch ->
+            when (ch) {
+                '[' -> {
+                    depth++
+                    current.append(ch)
+                }
+
+                ']' -> {
+                    depth--
+                    current.append(ch)
+                }
+
+                ',' -> {
+                    if (depth == 0) {
+                        result.add(current.toString().trim())
+                        current.clear()
+                    } else {
+                        current.append(ch)
+                    }
+                }
+
+                else -> current.append(ch)
+            }
+        }
+
+        if (current.isNotEmpty()) {
+            result.add(current.toString().trim())
+        }
+
+        return result
     }
 
     override fun visitProgram(ctx: SlangParser.ProgramContext): ASTNode {
@@ -38,7 +100,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
             val mutable = fieldCtx.getChild(0).text == "var"
             ClassField(
                 name = fieldCtx.IDENT().text,
-                type = parseType(fieldCtx.type().text),
+                type = parseType(fieldCtx.type()),
                 mutable = mutable,
                 location = location(fieldCtx)
             )
@@ -53,14 +115,14 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
 
     override fun visitLetStmt(ctx: SlangParser.LetStmtContext): ASTNode {
         val name = ctx.IDENT().text
-        val type = parseType(ctx.type().text)
+        val type = parseType(ctx.type())
         val expr = visit(ctx.expr()) as Expr
         return Stmt.LetStmt(name, type, expr, location(ctx))
     }
 
     override fun visitVarStmt(ctx: SlangParser.VarStmtContext): ASTNode {
         val name = ctx.IDENT().text
-        val type = parseType(ctx.type().text)
+        val type = parseType(ctx.type())
         val expr = visit(ctx.expr()) as Expr
         return Stmt.VarStmt(name, type, expr, location(ctx))
     }
@@ -120,10 +182,10 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val params = ctx.paramList()?.param()?.map {
             val paramName = it.IDENT().text
-            val paramType = parseType(it.type().text)
+            val paramType = parseType(it.type())
             Param(paramName, paramType, location(it))
         } ?: emptyList()
-        val returnType = parseType(ctx.type().text)
+        val returnType = parseType(ctx.type())
         val body = ctx.block().statement().map { visit(it) as Stmt }
         return Stmt.FunctionDef(name, params, returnType, body, location(ctx))
     }
@@ -154,7 +216,7 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val loc = location(ctx)
         ctx.forVarDecl()?.let { decl ->
             val name = decl.IDENT().text
-            val type = parseType(decl.type().text)
+            val type = parseType(decl.type())
             val expr = visit(decl.expr()) as Expr
             return if (decl.getChild(0).text == "let") {
                 Stmt.LetStmt(name, type, expr, loc)
@@ -301,10 +363,10 @@ class ASTBuilder : SlangBaseVisitor<ASTNode>() {
         val name = ctx.IDENT().text
         val params = ctx.paramList()?.param()?.map {
             val paramName = it.IDENT().text
-            val paramType = parseType(it.type().text)
+            val paramType = parseType(it.type())
             Param(paramName, paramType, location(it))
         } ?: emptyList()
-        val returnType = parseType(ctx.type().text)
+        val returnType = parseType(ctx.type())
         val body = ctx.block().statement().map { visit(it) as Stmt }
         return MethodDef(name, params, returnType, body, location(ctx))
     }

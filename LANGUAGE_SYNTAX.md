@@ -26,7 +26,7 @@ Complete syntax guide for the Slang programming language.
 let x: Int = 10;
 let name: String = "hello";
 let flag: Bool = true;
-let xs: List = [1, 2, 3];
+let xs: List[Int] = [1, 2, 3];
 ```
 
 Immutable variables cannot be reassigned after declaration.
@@ -486,7 +486,7 @@ print(c.value);  // 5
 ### Class Rules (v1)
 - No inheritance
 - No interfaces
-- No generics
+- No user-defined generics (only built-in `List[T]` typing)
 - No method overloading
 - Class instances are reference types
 - Printing class instances directly is not supported in v1
@@ -498,14 +498,16 @@ print(c.value);  // 5
 ### List Literals
 
 ```slang
-let xs: List = [10, 20, 30];
-let empty: List = [];
+let xs: List[Int] = [10, 20, 30];
+let names: List[String] = ["ana", "bob"];
+let empty: List[String] = [];
+let compat: List = [1, 2, 3];  // backward-compatible alias for List[Int]
 ```
 
 ### Indexing
 
 ```slang
-let xs: List = [10, 20, 30];
+let xs: List[Int] = [10, 20, 30];
 print(xs[0]);    // 10
 print(xs[1]);    // 20
 print(xs[2]);    // 30
@@ -521,7 +523,7 @@ Returns the length of a `List` or `String`.
 
 **List length:**
 ```slang
-let xs: List = [1, 2, 3, 4, 5];
+let xs: List[Int] = [1, 2, 3, 4, 5];
 print(len(xs));  // 5
 ```
 
@@ -531,11 +533,45 @@ let name: String = "Alice";
 print(len(name));  // 5
 ```
 
+### `substr(text, start, length)`
+
+Returns a substring.
+
+```slang
+let text: String = "slang";
+print(substr(text, 1, 3));  // "lan"
+```
+
+### `contains(text, needle)`
+
+Returns `true` when `needle` occurs in `text`.
+
+```slang
+print(contains("slang", "lan"));  // true
+```
+
+### `to_int(text)`
+
+Parses a string as an `Int`.
+
+```slang
+print(to_int("42"));  // 42
+```
+
+### Numeric helpers: `min`, `max`, `abs`
+
+```slang
+print(min(3, 9));      // 3
+print(max(3.5, 2));    // 3.5
+print(abs(-12));       // 12
+print(abs(-2.5));      // 2.5
+```
+
 ### List Examples
 
 ```slang
 // Create a list
-let numbers: List = [1, 2, 3, 4, 5];
+let numbers: List[Int] = [1, 2, 3, 4, 5];
 
 // Access elements
 let first: Int = numbers[0];
@@ -617,7 +653,7 @@ print(area);  // 78.53975
 
 ### Example 6: List Processing
 ```slang
-let numbers: List = [2, 4, 6, 8, 10];
+let numbers: List[Int] = [2, 4, 6, 8, 10];
 var i: Int = 0;
 var sum: Int = 0;
 
@@ -641,7 +677,7 @@ print(sum);  // 30
 | `Float` | 32-bit floating point | `3.14`, `2.5e10` |
 | `Bool` | Boolean value | `true`, `false` |
 | `String` | Text string | `"hello"`, `"world\n"` |
-| `List` | List of integers | `[1, 2, 3]` |
+| `List[T]` | Typed list (for example `List[Int]`, `List[String]`, `List[Point]`) | `[1, 2, 3]` |
 | `Void` | No value (functions only) | N/A |
 | `<ClassName>` | User-defined class instance type | `Point`, `Counter` |
 
@@ -833,9 +869,8 @@ while (i < len(list) && !found) {
 ## Limitations & Notes
 
 ### Current Limitations
-- No arrays (only integer Lists)
+- No arrays (use typed `List[T]`)
 - No mixed-type string concatenation (`String + Int`, etc.); use explicit conversion helpers once available
-- No string manipulation functions yet
 - No type inference (explicit types required)
 - No inheritance or interfaces
 - No direct `print(obj)` for class instances in v1

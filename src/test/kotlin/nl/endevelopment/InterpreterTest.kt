@@ -958,6 +958,47 @@ class InterpreterTest {
     }
 
     @Test
+    fun testTypedListStringIndex() {
+        val source = """
+            let words: List[String] = ["alpha", "beta"];
+            print(words[1]);
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("beta", output)
+    }
+
+    @Test
+    fun testBuiltInSubstrContainsAndToInt() {
+        val source = """
+            let text: String = "slang";
+            print(substr(text, 1, 3));
+            print(contains(text, "lan"));
+            print(to_int("42"));
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        assertEquals("lan\ntrue\n42", output)
+    }
+
+    @Test
+    fun testBuiltInMinMaxAndAbs() {
+        val source = """
+            print(min(10, 3));
+            print(max(2.5, 4));
+            print(abs(-9));
+            print(abs(-2.5));
+        """.trimIndent()
+
+        val output = captureInterpreterOutput(source)
+        val lines = output.split("\n")
+        assertEquals("3", lines[0])
+        assertEquals("4.0", lines[1])
+        assertEquals("9", lines[2])
+        assertEquals("2.5", lines[3])
+    }
+
+    @Test
     fun testConditionMustBeBool() {
         val source = """
             let x: Int = 1;

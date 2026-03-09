@@ -6,6 +6,7 @@ import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
 import nl.endevelopment.semantic.Type
+import kotlin.math.abs
 
 class Interpreter {
 
@@ -21,6 +22,7 @@ class Interpreter {
     private val classes = mutableMapOf<String, ClassRuntimeInfo>()
     private var functionDepth = 0
     private var loopDepth = 0
+    private val builtInFunctions = setOf("len", "substr", "contains", "to_int", "min", "max", "abs")
 
     private class ReturnSignal(val value: Value) : RuntimeException(null, null, false, false)
     private class BreakSignal : RuntimeException(null, null, false, false)
@@ -242,8 +244,8 @@ class Interpreter {
     }
 
     private fun registerFunction(stmt: Stmt.FunctionDef) {
-        if (stmt.name == "len") {
-            throw RuntimeException(stmt.location.format("Cannot redefine built-in function 'len'."))
+        if (stmt.name in builtInFunctions) {
+            throw RuntimeException(stmt.location.format("Cannot redefine built-in function '${stmt.name}'."))
         }
         if (functions.containsKey(stmt.name)) {
             throw RuntimeException(stmt.location.format("Function '${stmt.name}' is already defined."))
@@ -252,8 +254,8 @@ class Interpreter {
     }
 
     private fun callFunction(expr: Expr.Call, allowVoid: Boolean): Value {
-        if (expr.name == "len") {
-            return evalLen(expr)
+        if (expr.name in builtInFunctions) {
+            return evalBuiltIn(expr)
         }
 
         classes[expr.name]?.let { classInfo ->
@@ -364,6 +366,19 @@ class Interpreter {
         evaluate(stmt.expr, allowVoid = true)
     }
 
+    private fun evalBuiltIn(expr: Expr.Call): Value {
+        return when (expr.name) {
+            "len" -> evalLen(expr)
+            "substr" -> evalSubstr(expr)
+            "contains" -> evalContains(expr)
+            "to_int" -> evalToInt(expr)
+            "min" -> evalMin(expr)
+            "max" -> evalMax(expr)
+            "abs" -> evalAbs(expr)
+            else -> throw RuntimeException(expr.location.format("Unknown built-in function '${expr.name}'."))
+        }
+    }
+
     private fun evalLen(expr: Expr.Call): Value {
         if (expr.args.size != 1) {
             throw RuntimeException(expr.location.format("len expects 1 argument, got ${expr.args.size}."))
@@ -373,6 +388,102 @@ class Interpreter {
             is Value.ListValue -> Value.IntValue(value.elements.size)
             is Value.StringValue -> Value.IntValue(value.value.length)
             else -> throw RuntimeException(expr.args[0].location.format("len expects a List or String argument."))
+        }
+    }
+
+    private fun evalSubstr(expr: Expr.Call): Value {
+        if (expr.args.size != 3) {
+            throw RuntimeException(expr.location.format("substr expects 3 arguments, got ${expr.args.size}."))
+        }
+        val source = evaluate(expr.args[0], allowVoid = false) as? Value.StringValue
+            ?: throw RuntimeException(expr.args[0].location.format("substr expects argument 1 to be String."))
+        val start = evaluate(expr.args[1], allowVoid = false) as? Value.IntValue
+            ?: throw RuntimeException(expr.args[1].location.format("substr expects argument 2 to be Int."))
+        val length = evaluate(expr.args[2], allowVoid = false) as? Value.IntValue
+            ?: throw RuntimeException(expr.args[2].location.format("substr expects argument 3 to be Int."))
+
+        val startIndex = start.value
+        val lengthValue = length.value
+        val endIndex = startIndex + lengthValue
+        if (startIndex < 0 || lengthValue < 0 || startIndex > source.value.length || endIndex > source.value.length) {
+            throw RuntimeException(
+                expr.location.format(
+                    "substr indices out of bounds: start=$startIndex, length=$lengthValue, source length=${source.value.length}."
+                )
+            )
+        }
+
+        return Value.StringValue(source.value.substring(startIndex, endIndex))
+    }
+
+    private fun evalContains(expr: Expr.Call): Value {
+        if (expr.args.size != 2) {
+            throw RuntimeException(expr.location.format("contains expects 2 arguments, got ${expr.args.size}."))
+        }
+        val source = evaluate(expr.args[0], allowVoid = false) as? Value.StringValue
+            ?: throw RuntimeException(expr.args[0].location.format("contains expects argument 1 to be String."))
+        val needle = evaluate(expr.args[1], allowVoid = false) as? Value.StringValue
+            ?: throw RuntimeException(expr.args[1].location.format("contains expects argument 2 to be String."))
+        return Value.BoolValue(source.value.contains(needle.value))
+    }
+
+    private fun evalToInt(expr: Expr.Call): Value {
+        if (expr.args.size != 1) {
+            throw RuntimeException(expr.location.format("to_int expects 1 argument, got ${expr.args.size}."))
+        }
+        val source = evaluate(expr.args[0], allowVoid = false) as? Value.StringValue
+            ?: throw RuntimeException(expr.args[0].location.format("to_int expects a String argument."))
+
+        val parsed = source.value.trim().toIntOrNull()
+            ?: throw RuntimeException(expr.location.format("to_int could not parse '${source.value}' as Int."))
+        return Value.IntValue(parsed)
+    }
+
+    private fun evalMin(expr: Expr.Call): Value {
+        if (expr.args.size != 2) {
+            throw RuntimeException(expr.location.format("min expects 2 arguments, got ${expr.args.size}."))
+        }
+        val left = evaluate(expr.args[0], allowVoid = false)
+        val right = evaluate(expr.args[1], allowVoid = false)
+        return minMaxValue(expr.location, left, right, chooseMin = true)
+    }
+
+    private fun evalMax(expr: Expr.Call): Value {
+        if (expr.args.size != 2) {
+            throw RuntimeException(expr.location.format("max expects 2 arguments, got ${expr.args.size}."))
+        }
+        val left = evaluate(expr.args[0], allowVoid = false)
+        val right = evaluate(expr.args[1], allowVoid = false)
+        return minMaxValue(expr.location, left, right, chooseMin = false)
+    }
+
+    private fun minMaxValue(location: SourceLocation, left: Value, right: Value, chooseMin: Boolean): Value {
+        return when {
+            left is Value.IntValue && right is Value.IntValue -> {
+                if (chooseMin) Value.IntValue(minOf(left.value, right.value))
+                else Value.IntValue(maxOf(left.value, right.value))
+            }
+
+            isNumericValue(left) && isNumericValue(right) -> {
+                val leftFloat = asFloat(left)
+                val rightFloat = asFloat(right)
+                if (chooseMin) Value.FloatValue(minOf(leftFloat, rightFloat))
+                else Value.FloatValue(maxOf(leftFloat, rightFloat))
+            }
+
+            else -> throw RuntimeException(location.format("min/max expects numeric arguments."))
+        }
+    }
+
+    private fun evalAbs(expr: Expr.Call): Value {
+        if (expr.args.size != 1) {
+            throw RuntimeException(expr.location.format("abs expects 1 argument, got ${expr.args.size}."))
+        }
+
+        return when (val value = evaluate(expr.args[0], allowVoid = false)) {
+            is Value.IntValue -> Value.IntValue(abs(value.value))
+            is Value.FloatValue -> Value.FloatValue(abs(value.value))
+            else -> throw RuntimeException(expr.args[0].location.format("abs expects a numeric argument."))
         }
     }
 
@@ -418,18 +529,52 @@ class Interpreter {
     }
 
     private fun validateReturnType(expected: Type, value: Value, location: SourceLocation) {
-        when (expected) {
-            Type.INT -> if (value !is Value.IntValue) throw RuntimeException(location.format("Function return type mismatch. Expected Int."))
-            Type.FLOAT -> if (value !is Value.FloatValue && value !is Value.IntValue) throw RuntimeException(location.format("Function return type mismatch. Expected Float."))
-            Type.BOOL -> if (value !is Value.BoolValue) throw RuntimeException(location.format("Function return type mismatch. Expected Bool."))
-            Type.STRING -> if (value !is Value.StringValue) throw RuntimeException(location.format("Function return type mismatch. Expected String."))
-            Type.LIST -> if (value !is Value.ListValue) throw RuntimeException(location.format("Function return type mismatch. Expected List."))
-            Type.VOID -> if (value !is Value.VoidValue) throw RuntimeException(location.format("Function return type mismatch. Expected void."))
-            is Type.CLASS -> {
-                if (value !is Value.ObjectValue || value.className != expected.name) {
-                    throw RuntimeException(location.format("Function return type mismatch. Expected ${expected.name}."))
+        if (!valueMatchesType(expected, value)) {
+            throw RuntimeException(
+                location.format("Function return type mismatch. Expected $expected, got ${inferRuntimeType(value)}.")
+            )
+        }
+    }
+
+    private fun valueMatchesType(expected: Type, value: Value): Boolean {
+        return when (expected) {
+            Type.INT -> value is Value.IntValue
+            Type.FLOAT -> value is Value.FloatValue || value is Value.IntValue
+            Type.BOOL -> value is Value.BoolValue
+            Type.STRING -> value is Value.StringValue
+            is Type.LIST -> {
+                if (value !is Value.ListValue) {
+                    return false
+                }
+                val elementType = expected.elementType
+                if (elementType == null) {
+                    return true
+                }
+                value.elements.all { valueMatchesType(elementType, it) }
+            }
+
+            Type.VOID -> value is Value.VoidValue
+            is Type.CLASS -> value is Value.ObjectValue && value.className == expected.name
+        }
+    }
+
+    private fun inferRuntimeType(value: Value): String {
+        return when (value) {
+            is Value.IntValue -> "Int"
+            is Value.FloatValue -> "Float"
+            is Value.BoolValue -> "Bool"
+            is Value.StringValue -> "String"
+            is Value.ListValue -> {
+                if (value.elements.isEmpty()) {
+                    "List"
+                } else {
+                    val first = inferRuntimeType(value.elements.first())
+                    "List[$first]"
                 }
             }
+
+            is Value.ObjectValue -> value.className
+            is Value.VoidValue -> "Void"
         }
     }
 
@@ -583,6 +728,18 @@ class Interpreter {
             left is Value.IntValue && right is Value.FloatValue -> Value.BoolValue(left.value.toFloat() >= right.value)
             left is Value.FloatValue && right is Value.IntValue -> Value.BoolValue(left.value >= right.value.toFloat())
             else -> throw RuntimeException(location.format("Unsupported operand types for '>=': ${left::class.simpleName} and ${right::class.simpleName}."))
+        }
+    }
+
+    private fun isNumericValue(value: Value): Boolean {
+        return value is Value.IntValue || value is Value.FloatValue
+    }
+
+    private fun asFloat(value: Value): Float {
+        return when (value) {
+            is Value.IntValue -> value.value.toFloat()
+            is Value.FloatValue -> value.value
+            else -> throw IllegalArgumentException("Expected numeric value.")
         }
     }
 

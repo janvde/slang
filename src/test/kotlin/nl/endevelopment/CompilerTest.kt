@@ -605,4 +605,97 @@ class CompilerTest {
             tempOutput.delete()
         }
     }
+
+    @Test
+    fun testTypedListStringProgramCompiles() {
+        val source = """
+            let words: List[String] = ["ab", "cd"];
+            print(words[0]);
+            print(len(words));
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "ab"))
+            assertTrue(hasPrintedLine(output, "2"))
+            assertTrue(tempOutput.readText().contains("%List = type { i64, ptr }"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testBuiltInsEmitExpectedRuntimeCalls() {
+        val source = """
+            let s: String = "slang";
+            print(substr(s, 1, 3));
+            print(contains(s, "la"));
+            print(to_int("123"));
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+
+            assertTrue(hasPrintedLine(output, "lan"))
+            assertTrue(hasPrintedLine(output, "true"))
+            assertTrue(hasPrintedLine(output, "123"))
+
+            val ir = tempOutput.readText()
+            assertTrue(ir.contains("declare ptr @strncpy(ptr, ptr, i64)"))
+            assertTrue(ir.contains("declare ptr @strstr(ptr, ptr)"))
+            assertTrue(ir.contains("declare i32 @atoi(ptr)"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testDuplicateDiagnosticIncludesRelatedLocation() {
+        val source = """
+            fn id(x: Int): Int { return x; }
+            fn id(y: Int): Int { return y; }
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+            assertTrue(output.contains("Function 'id' is already defined."))
+            assertTrue(output.contains("Note: previous declaration is at line 1"))
+        } finally {
+            tempOutput.delete()
+        }
+    }
+
+    @Test
+    fun testParserRecoveryReportsMultipleSyntaxErrors() {
+        val source = """
+            let x: Int = ;
+            if (1 {
+                print(x)
+            }
+        """.trimIndent()
+        val tempOutput = File.createTempFile("test_", ".ll")
+        try {
+            val compiler = Compiler()
+            val output = captureOutput {
+                compiler.compile(source, tempOutput.absolutePath)
+            }
+            assertTrue(output.contains("Compilation Error"))
+            val parserErrorLines = output.lines().count { it.contains("Error at line") }
+            assertTrue(parserErrorLines >= 2)
+        } finally {
+            tempOutput.delete()
+        }
+    }
 }

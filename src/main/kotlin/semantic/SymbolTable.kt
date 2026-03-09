@@ -5,7 +5,7 @@ sealed class Type {
     data object FLOAT : Type()
     data object BOOL : Type()
     data object STRING : Type()
-    data object LIST : Type()
+    data class LIST(val elementType: Type? = null) : Type()
     data object VOID : Type()
     data class CLASS(val name: String) : Type()
 
@@ -16,7 +16,8 @@ sealed class Type {
                 "Float" -> FLOAT
                 "Bool" -> BOOL
                 "String" -> STRING
-                "List" -> LIST
+                // Backward-compatible bare List defaults to List[Int].
+                "List" -> LIST(INT)
                 "Void" -> VOID
                 else -> CLASS(name)
             }
@@ -29,7 +30,7 @@ sealed class Type {
             FLOAT -> "Float"
             BOOL -> "Bool"
             STRING -> "String"
-            LIST -> "List"
+            is LIST -> elementType?.let { "List[$it]" } ?: "List"
             VOID -> "Void"
             is CLASS -> name
         }
