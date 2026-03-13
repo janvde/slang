@@ -39,15 +39,22 @@ slang/
 │   │   ├── ast/
 │   │   │   └── ASTNodes.kt        # Abstract Syntax Tree node definitions
 │   │   ├── codegen/
-│   │   │   └── CodeGenerator.kt   # LLVM IR code generation
+│   │   │   ├── CodeGenerator.kt   # Codegen pipeline facade
+│   │   │   ├── CodegenContext.kt  # Shared LLVM/module context
+│   │   │   ├── *Emitter*.kt       # Statement/expression/declaration emitters
+│   │   │   └── TypeLowering.kt    # Semantic Type -> LLVM type lowering
 │   │   ├── compiler/
 │   │   │   └── Compiler.kt        # Main compiler logic
 │   │   ├── interpreter/
-│   │   │   └── Interpreter.kt     # Direct interpretation
+│   │   │   ├── Interpreter.kt      # Interpreter facade
+│   │   │   └── runtime/            # Runtime execution subsystems
 │   │   ├── parser/
-│   │   │   └── ASTBuilder.kt      # Parse tree to AST conversion
+│   │   │   ├── ASTBuilder.kt       # ANTLR visitor facade
+│   │   │   └── builder/            # AST builder helpers (stmt/expr/type/location)
 │   │   ├── semantic/
-│   │   │   └── TypeChecker.kt     # Static type checking and semantic validation
+│   │   │   ├── TypeChecker.kt      # Type checker facade
+│   │   │   ├── core/               # Shared semantic rules/indexing/call resolution
+│   │   │   └── typechecker/        # Declaration, expression, statement passes
 │   │   └── utils/
 │   │       └── Utils.kt           # Utility functions
 │   └── resources/
@@ -55,6 +62,16 @@ slang/
 ├── build.gradle.kts              # Gradle build configuration
 └── gradle.properties             # Gradle properties (includes Java toolchain)
 ```
+
+## Architecture Notes
+
+- `TypeChecker`, `Interpreter`, `ASTBuilder`, and `CodeGenerator` are facades.
+- Core logic is split by compiler responsibilities:
+  - semantic rules/indexing (`semantic/core`)
+  - type-checking passes (`semantic/typechecker`)
+  - parser AST construction helpers (`parser/builder`)
+  - interpreter runtime execution subsystems (`interpreter/runtime`)
+  - codegen emitters/context/lowering (`codegen`)
 
 ## Prerequisites
 

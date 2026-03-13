@@ -6,6 +6,10 @@ import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.SourceLocation
 import nl.endevelopment.ast.Stmt
 import nl.endevelopment.semantic.Type
+import nl.endevelopment.semantic.core.BuiltinRegistry
+import nl.endevelopment.semantic.core.CallResolver
+import nl.endevelopment.semantic.core.ProgramIndex
+import nl.endevelopment.semantic.core.TypeRules
 import org.bytedeco.javacpp.PointerPointer
 import org.bytedeco.llvm.LLVM.*
 import org.bytedeco.llvm.global.LLVM.*
@@ -41,7 +45,18 @@ class CodeGenerator {
 
     private val listStructType: LLVMTypeRef = LLVMStructCreateNamed(context, "List")
     private val loopTargets = mutableListOf<LoopTarget>()
-    private val builtInFunctions = setOf("len", "substr", "contains", "to_int", "min", "max", "abs")
+    private val builtins = BuiltinRegistry()
+    private val callResolver = CallResolver(builtins)
+    private lateinit var programIndex: ProgramIndex
+    private val codegenContext = CodegenContext(context, module, builder)
+    private val statementEmitter: StatementEmitter = DefaultStatementEmitter(this)
+    private val expressionEmitter: ExpressionEmitter = DefaultExpressionEmitter(this)
+    private val runtimeDeclEmitter = RuntimeDeclEmitter(this)
+    private val declarationEmitter = DeclarationEmitter(this)
+    private val builtinCallEmitter = BuiltinCallEmitter(this)
+    private val typeLowering = TypeLowering(this)
+    private val valueCaster = ValueCaster(this)
+    private val builtInFunctions = builtins.names()
 
     private data class FunctionInfo(
         val name: String,
@@ -84,9 +99,7 @@ class CodeGenerator {
         LLVMInitializeNativeAsmPrinter()
         LLVMInitializeNativeAsmParser()
 
-        declareListType()
-        declarePrintf()
-        declareFormatStrings()
+        runtimeDeclEmitter.declareCoreRuntime()
     }
 
     private fun fail(location: SourceLocation, message: String): Nothing {
@@ -100,19 +113,17 @@ class CodeGenerator {
         LLVMStructSetBody(listStructType, elements, 2, 0)
     }
 
+    internal fun declareCoreRuntime() {
+        declareListType()
+        declarePrintf()
+        declareFormatStrings()
+    }
+
     fun generate(program: Program) {
+        programIndex = ProgramIndex.from(program)
         val classDefs = program.statements.filterIsInstance<Stmt.ClassDef>()
 
-        declareClassTypes(classDefs)
-
-        program.statements.filterIsInstance<Stmt.FunctionDef>()
-            .forEach { declareFunction(it) }
-
-        classDefs.forEach { classDef ->
-            classDef.methods.forEach { method ->
-                declareMethod(classDef.name, method)
-            }
-        }
+        declarationEmitter.emitProgramDeclarations(program)
 
         program.statements.filterIsInstance<Stmt.FunctionDef>()
             .forEach { generateFunctionBody(it) }
@@ -145,7 +156,7 @@ class CodeGenerator {
         program.statements.forEach {
             if (it !is Stmt.FunctionDef && it !is Stmt.ClassDef) {
                 if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-                    visit(it)
+                    statementEmitter.emit(it)
                 }
             }
         }
@@ -176,6 +187,10 @@ class CodeGenerator {
             is Stmt.ReturnStmt -> visit(stmt)
             is Stmt.ExprStmt -> visit(stmt)
         }
+    }
+
+    internal fun emitStatement(stmt: Stmt) {
+        visit(stmt)
     }
 
     private fun visit(stmt: Stmt.LetStmt) {
@@ -415,7 +430,7 @@ class CodeGenerator {
         when (val expr = stmt.expr) {
             is Expr.Call -> buildCall(expr, allowVoid = true)
             is Expr.MemberCall -> buildMemberCall(expr, allowVoid = true)
-            else -> visit(expr)
+            else -> expressionEmitter.emit(expr)
         }
     }
 
@@ -602,12 +617,13 @@ class CodeGenerator {
             }
 
             is Expr.Call -> {
-                if (expr.name in builtInFunctions) {
-                    inferBuiltInCallType(expr)
-                } else {
-                    classes[expr.name]?.let { return Type.CLASS(expr.name) }
-                    functions[expr.name]?.returnType
-                        ?: throw Exception("Undefined function during type inference: ${expr.name}")
+                val target = callResolver.resolve(expr.name, programIndex, expr.location) { location, message ->
+                    throw Exception(location.format(message))
+                }
+                when (target) {
+                    is CallResolver.CallTarget.Builtin -> inferBuiltInCallType(expr)
+                    is CallResolver.CallTarget.Constructor -> Type.CLASS(target.className)
+                    is CallResolver.CallTarget.Function -> target.returnType
                 }
             }
 
@@ -843,6 +859,10 @@ class CodeGenerator {
         }
     }
 
+    internal fun emitExpression(expr: Expr): LLVMValueRef {
+        return visit(expr)
+    }
+
     private fun buildMemberAccess(expr: Expr.MemberAccess): LLVMValueRef {
         val receiverType = inferExprType(expr.receiver)
         val classType = receiverType as? Type.CLASS
@@ -906,7 +926,7 @@ class CodeGenerator {
 
     private fun buildCall(expr: Expr.Call, allowVoid: Boolean): LLVMValueRef {
         if (expr.name in builtInFunctions) {
-            return buildBuiltInCall(expr)
+            return builtinCallEmitter.emit(expr)
         }
 
         classes[expr.name]?.let { classInfo ->
@@ -964,6 +984,10 @@ class CodeGenerator {
             "abs" -> buildAbsCall(expr)
             else -> throw Exception("Unknown built-in function '${expr.name}'.")
         }
+    }
+
+    internal fun emitBuiltinCall(expr: Expr.Call): LLVMValueRef {
+        return buildBuiltInCall(expr)
     }
 
     private fun buildMemberCall(expr: Expr.MemberCall, allowVoid: Boolean): LLVMValueRef {
@@ -1383,6 +1407,10 @@ class CodeGenerator {
         }
     }
 
+    internal fun declareClassTypesPhase(classDefs: List<Stmt.ClassDef>) {
+        declareClassTypes(classDefs)
+    }
+
     private fun declareMethod(className: String, method: MethodDef) {
         val classInfo = classes[className]
             ?: throw Exception("Unknown class '$className'.")
@@ -1423,6 +1451,10 @@ class CodeGenerator {
         functions[mangledName] = info
     }
 
+    internal fun declareMethodPhase(className: String, method: MethodDef) {
+        declareMethod(className, method)
+    }
+
     private fun declareFunction(stmt: Stmt.FunctionDef) {
         if (functions.containsKey(stmt.name)) {
             throw Exception("Function '${stmt.name}' already declared.")
@@ -1454,6 +1486,10 @@ class CodeGenerator {
             llvmFunc = fn,
             llvmType = fnType
         )
+    }
+
+    internal fun declareFunctionPhase(stmt: Stmt.FunctionDef) {
+        declareFunction(stmt)
     }
 
     private fun generateMethodBody(className: String, method: MethodDef) {
@@ -1569,6 +1605,10 @@ class CodeGenerator {
         }
     }
 
+    internal fun lowerType(type: Type): LLVMTypeRef {
+        return llvmTypeFor(type)
+    }
+
     private fun declarePrintf(): LLVMValueRef {
         val printfReturnType = LLVMInt32TypeInContext(context)
         val printfParamType = LLVMPointerType(LLVMInt8TypeInContext(context), 0)
@@ -1670,6 +1710,10 @@ class CodeGenerator {
         return value
     }
 
+    internal fun castValue(value: LLVMValueRef, fromType: Type, toType: Type): LLVMValueRef {
+        return castValueIfNeeded(value, fromType, toType)
+    }
+
     fun printIR() {
         val ir = LLVMPrintModuleToString(module)
         println(ir.string)
@@ -1688,5 +1732,5 @@ class CodeGenerator {
         LLVMContextDispose(context)
     }
 
-    private fun isNumeric(type: Type): Boolean = type == Type.INT || type == Type.FLOAT
+    private fun isNumeric(type: Type): Boolean = TypeRules.isNumeric(type)
 }
