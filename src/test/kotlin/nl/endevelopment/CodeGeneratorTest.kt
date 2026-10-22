@@ -371,4 +371,40 @@ class CodeGeneratorTest {
         assertTrue(ir.contains("declare ptr @strstr(ptr, ptr)"))
         assertTrue(ir.contains("declare i32 @atoi(ptr)"))
     }
+
+    @Test
+    fun testMethodsLoopsAndBuiltinsShareCodegenState() {
+        val ir = generateIR(
+            """
+            class Accumulator(var total: Float) {
+                fn add(value: Float): Float {
+                    this.total = this.total + value;
+                    return this.total;
+                }
+            }
+            fn positive(value: Float): Float {
+                return abs(value);
+            }
+            let values: List[Float] = [1, 2.5];
+            let accumulator: Accumulator = Accumulator(0);
+            var initial: Int = 1;
+            accumulator.add(initial);
+            for (var i: Int = 0; i < len(values); i = i + 1) {
+                if (values[i] > 0.0) {
+                    print(accumulator.add(positive(values[i])));
+                }
+            }
+            """.trimIndent()
+        )
+
+        assertTrue(ir.contains("%Class_Accumulator = type { float }"))
+        assertTrue(ir.contains("%List = type { i64, ptr }"))
+        assertTrue(ir.contains("define float @Accumulator__add"))
+        assertTrue(ir.contains("call float @Accumulator__add"))
+        assertTrue(ir.contains("call float @positive"))
+        assertTrue(ir.contains("sitofp i32"))
+        assertTrue(ir.contains("fcmp"))
+        assertTrue(ir.contains("call i32 (ptr, ...) @printf"))
+    }
+
 }
