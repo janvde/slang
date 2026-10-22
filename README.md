@@ -40,9 +40,10 @@ slang/
 │   │   │   └── ASTNodes.kt        # Abstract Syntax Tree node definitions
 │   │   ├── codegen/
 │   │   │   ├── CodeGenerator.kt   # Codegen pipeline facade
-│   │   │   ├── CodegenContext.kt  # Shared LLVM/module context
+│   │   │   ├── CodegenContext.kt  # Shared LLVM resources, symbols, and services
 │   │   │   ├── *Emitter*.kt       # Statement/expression/declaration emitters
-│   │   │   └── TypeLowering.kt    # Semantic Type -> LLVM type lowering
+│   │   │   ├── TypeLowering.kt    # Semantic Type -> LLVM type lowering
+│   │   │   └── ValueCaster.kt     # Numeric value conversions
 │   │   ├── compiler/
 │   │   │   └── Compiler.kt        # Main compiler logic
 │   │   ├── interpreter/
@@ -72,6 +73,12 @@ slang/
   - parser AST construction helpers (`parser/builder`)
   - interpreter runtime execution subsystems (`interpreter/runtime`)
   - codegen emitters/context/lowering (`codegen`)
+
+`CodeGenerator` coordinates the pipeline. Statement and expression emitters own
+instruction generation; declaration and runtime emitters own LLVM declarations
+and function bodies. Built-in calls, type lowering, and value casting have their
+own implementations. These components share resources and symbols through
+`CodegenContext` and do not call back into `CodeGenerator`.
 
 ## Prerequisites
 
