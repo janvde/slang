@@ -74,11 +74,17 @@ slang/
   - interpreter runtime execution subsystems (`interpreter/runtime`)
   - codegen emitters/context/lowering (`codegen`)
 
-`CodeGenerator` coordinates the pipeline. Statement and expression emitters own
-instruction generation; declaration and runtime emitters own LLVM declarations
-and function bodies. Built-in calls, type lowering, and value casting have their
-own implementations. These components share resources and symbols through
-`CodegenContext` and do not call back into `CodeGenerator`.
+`CodeGenerator` coordinates the pipeline. Statement and expression emitters
+handle assignments, control flow, and operators. Dedicated emitters handle lists,
+strings, function/method/constructor calls, printing, declarations, and runtime
+functions. Function and method bodies share parameter binding, body traversal,
+and default-return generation.
+
+Expression emitters, statement emitters, and built-in calls use the shared
+`ExpressionTypeResolver` to query current symbols without emitting LLVM
+instructions. Type lowering and value casting have their own implementations.
+These components share resources and symbols through `CodegenContext` and do not
+call back into `CodeGenerator`.
 
 ## Prerequisites
 

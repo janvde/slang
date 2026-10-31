@@ -88,7 +88,12 @@ internal class CodegenContext {
     val types = TypeLowering(this)
     val caster = ValueCaster(this)
     val builtinCalls = BuiltinCallEmitter(this)
+    val expressionTypes = ExpressionTypeResolver(this)
+    val strings = StringEmitter(this)
+    val lists = ListEmitter(this)
+    val calls = CallEmitter(this)
     val expressions = DefaultExpressionEmitter(this)
+    val printing = PrintEmitter(this)
     val statements = DefaultStatementEmitter(this)
     val declarations = DeclarationEmitter(this)
 
