@@ -407,4 +407,57 @@ class CodeGeneratorTest {
         assertTrue(ir.contains("call i32 (ptr, ...) @printf"))
     }
 
+
+    @Test
+    fun testDefaultReturnsForFunctionsAndMethods() {
+        val cases = listOf(
+            "Void" to "ret void",
+            "Int" to "ret i32 0",
+            "Float" to "ret float 0.000000e+00",
+            "Bool" to "ret i1 false",
+            "String" to "ret ptr null",
+            "List[Int]" to "ret ptr null",
+            "Thing" to "ret ptr null"
+        )
+        for ((returnType, expectedReturn) in cases) {
+            val ir = generateIR(
+                """
+                class Thing(var value: Int) {
+                    fn fallback(value: Int): $returnType {}
+                }
+                fn fallback(value: Int): $returnType {}
+                let value: Int = 42;
+                print(value);
+                """.trimIndent()
+            )
+            for (name in listOf("fallback", "Thing__fallback")) {
+                val definition = ir.lineSequence().first {
+                    it.startsWith("define ") && it.contains("@$name(")
+                }
+                val body = ir.substringAfter(definition).substringBefore("\n}")
+                val terminator = body.lineSequence().map { it.trim() }.last { it.isNotBlank() }
+                assertEquals(expectedReturn, terminator, "$name returning $returnType")
+            }
+            assertTrue(ir.contains("store i32 42"))
+        }
+    }
+
+    @Test
+    fun testVoidCallsCannotBeUsedAsValues() {
+        val functionError = assertFailsWith<Exception> {
+            generateIR("fn noop(): Void {} let result: Int = noop();")
+        }
+        assertEquals("Cannot use void function 'noop' in an expression.", functionError.message)
+
+        val methodError = assertFailsWith<Exception> {
+            generateIR(
+                """
+                class Thing(var value: Int) { fn noop(): Void {} }
+                let thing: Thing = Thing(1);
+                let result: Int = thing.noop();
+                """.trimIndent()
+            )
+        }
+        assertEquals("Cannot use void method 'noop' in an expression.", methodError.message)
+    }
 }

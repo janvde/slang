@@ -15,11 +15,11 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
                     if (expr.args.size != 1) {
                         fail(expr.location, "len expects 1 argument, got ${expr.args.size}.")
                     }
-                    val argType = expressions.inferExprType(expr.args[0])
+                    val argType = expressionTypes.inferExprType(expr.args[0])
                     val argValue = state.emit(expr.args[0])
                     return when (argType) {
-                        is Type.LIST -> expressions.buildListLength(argValue)
-                        Type.STRING -> expressions.buildStringLength(argValue)
+                        is Type.LIST -> lists.buildListLength(argValue)
+                        Type.STRING -> strings.buildStringLength(argValue)
                         else -> fail(expr.args[0].location, "len expects a List or String argument.")
                     }
                 }
@@ -41,9 +41,9 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
                 fail(expr.location, "substr expects 3 arguments, got ${expr.args.size}.")
             }
 
-            val sourceType = expressions.inferExprType(expr.args[0])
-            val startType = expressions.inferExprType(expr.args[1])
-            val lengthType = expressions.inferExprType(expr.args[2])
+            val sourceType = expressionTypes.inferExprType(expr.args[0])
+            val startType = expressionTypes.inferExprType(expr.args[1])
+            val lengthType = expressionTypes.inferExprType(expr.args[2])
             if (sourceType != Type.STRING || startType != Type.INT || lengthType != Type.INT) {
                 fail(expr.location, "substr expects (String, Int, Int).")
             }
@@ -117,8 +117,8 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
             if (expr.args.size != 2) {
                 fail(expr.location, "contains expects 2 arguments, got ${expr.args.size}.")
             }
-            val haystackType = expressions.inferExprType(expr.args[0])
-            val needleType = expressions.inferExprType(expr.args[1])
+            val haystackType = expressionTypes.inferExprType(expr.args[0])
+            val needleType = expressionTypes.inferExprType(expr.args[1])
             if (haystackType != Type.STRING || needleType != Type.STRING) {
                 fail(expr.location, "contains expects (String, String).")
             }
@@ -153,7 +153,7 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
             if (expr.args.size != 1) {
                 fail(expr.location, "to_int expects 1 argument, got ${expr.args.size}.")
             }
-            val argType = expressions.inferExprType(expr.args[0])
+            val argType = expressionTypes.inferExprType(expr.args[0])
             if (argType != Type.STRING) {
                 fail(expr.location, "to_int expects a String argument.")
             }
@@ -178,8 +178,8 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
                 fail(expr.location, "${expr.name} expects 2 arguments, got ${expr.args.size}.")
             }
 
-            val leftType = expressions.inferExprType(expr.args[0])
-            val rightType = expressions.inferExprType(expr.args[1])
+            val leftType = expressionTypes.inferExprType(expr.args[0])
+            val rightType = expressionTypes.inferExprType(expr.args[1])
             if (!TypeRules.isNumeric(leftType) || !TypeRules.isNumeric(rightType)) {
                 fail(expr.location, "${expr.name} expects numeric arguments.")
             }
@@ -207,7 +207,7 @@ internal class BuiltinCallEmitter(private val state: CodegenContext) {
                 fail(expr.location, "abs expects 1 argument, got ${expr.args.size}.")
             }
 
-            val argType = expressions.inferExprType(expr.args[0])
+            val argType = expressionTypes.inferExprType(expr.args[0])
             val arg = state.emit(expr.args[0])
             return when (argType) {
                 Type.INT -> {

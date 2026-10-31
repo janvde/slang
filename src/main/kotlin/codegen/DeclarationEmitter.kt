@@ -1,6 +1,7 @@
 package codegen
 
 import nl.endevelopment.ast.MethodDef
+import nl.endevelopment.ast.Param
 import nl.endevelopment.ast.Program
 import nl.endevelopment.ast.Stmt
 import nl.endevelopment.semantic.Type
@@ -143,12 +144,30 @@ internal class DeclarationEmitter(private val state: CodegenContext) {
                 ?: throw Exception("Unknown class '$className'.")
             val info = classInfo.methods[method.name]
                 ?: throw Exception("Missing method info for '$className.${method.name}'.")
+            generateBody(info, method.returnType, className, method.params, method.body)
+        }
+    }
 
+    fun generateFunctionBody(stmt: Stmt.FunctionDef) {
+        with(state) {
+            val info = functions[stmt.name] ?: throw Exception("Missing function info for '${stmt.name}'.")
+            generateBody(info, stmt.returnType, null, stmt.params, stmt.body)
+        }
+    }
+
+    private fun generateBody(
+        info: FunctionInfo,
+        returnType: Type,
+        className: String?,
+        params: List<Param>,
+        body: List<Stmt>
+    ) {
+        with(state) {
             val entry = LLVMAppendBasicBlockInContext(context, info.llvmFunc, "entry")
             LLVMPositionBuilderAtEnd(builder, entry)
 
             val previousReturnType = currentFunctionReturnType
-            currentFunctionReturnType = method.returnType
+            currentFunctionReturnType = returnType
 
             val previousClassName = currentClassName
             currentClassName = className
@@ -156,64 +175,29 @@ internal class DeclarationEmitter(private val state: CodegenContext) {
             val previousSymbols = codegenSymbolTable
             codegenSymbolTable = mutableMapOf()
 
-            val selfValue = LLVMGetParam(info.llvmFunc, 0)
-            val selfPtr = LLVMBuildAlloca(builder, types.llvmTypeFor(Type.CLASS(className)), "this")
-            LLVMBuildStore(builder, selfValue, selfPtr)
-            codegenSymbolTable["this"] = SymbolInfo(Type.CLASS(className), selfPtr, immutable = true)
+            if (className != null) {
+                val selfValue = LLVMGetParam(info.llvmFunc, 0)
+                val selfPtr = LLVMBuildAlloca(builder, types.llvmTypeFor(Type.CLASS(className)), "this")
+                LLVMBuildStore(builder, selfValue, selfPtr)
+                codegenSymbolTable["this"] = SymbolInfo(Type.CLASS(className), selfPtr, immutable = true)
+            }
 
-            method.params.forEachIndexed { index, param ->
-                val paramValue = LLVMGetParam(info.llvmFunc, index + 1)
+            val paramOffset = if (className != null) 1 else 0
+            params.forEachIndexed { index, param ->
+                val paramValue = LLVMGetParam(info.llvmFunc, index + paramOffset)
                 val paramPtr = LLVMBuildAlloca(builder, types.llvmTypeFor(param.type), param.name)
                 LLVMBuildStore(builder, paramValue, paramPtr)
                 codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr, immutable = false)
             }
 
-            method.body.forEach { statement ->
+            body.forEach { statement ->
                 if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
                     state.emit(statement)
                 }
             }
 
             if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-                buildDefaultReturn(method.returnType)
-            }
-
-            currentFunctionReturnType = previousReturnType
-            currentClassName = previousClassName
-            codegenSymbolTable = previousSymbols
-        }
-    }
-
-    fun generateFunctionBody(stmt: Stmt.FunctionDef) {
-        with(state) {
-            val info = functions[stmt.name] ?: throw Exception("Missing function info for '${stmt.name}'.")
-            val entry = LLVMAppendBasicBlockInContext(context, info.llvmFunc, "entry")
-            LLVMPositionBuilderAtEnd(builder, entry)
-
-            val previousReturnType = currentFunctionReturnType
-            currentFunctionReturnType = stmt.returnType
-
-            val previousClassName = currentClassName
-            currentClassName = null
-
-            val previousSymbols = codegenSymbolTable
-            codegenSymbolTable = mutableMapOf()
-
-            stmt.params.forEachIndexed { index, param ->
-                val paramValue = LLVMGetParam(info.llvmFunc, index)
-                val paramPtr = LLVMBuildAlloca(builder, types.llvmTypeFor(param.type), param.name)
-                LLVMBuildStore(builder, paramValue, paramPtr)
-                codegenSymbolTable[param.name] = SymbolInfo(param.type, paramPtr, immutable = false)
-            }
-
-            stmt.body.forEach { statement ->
-                if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-                    state.emit(statement)
-                }
-            }
-
-            if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null) {
-                buildDefaultReturn(stmt.returnType)
+                buildDefaultReturn(returnType)
             }
 
             currentFunctionReturnType = previousReturnType
